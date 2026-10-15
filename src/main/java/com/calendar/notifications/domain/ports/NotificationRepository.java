@@ -6,8 +6,9 @@ import reactor.core.publisher.Mono;
 
 import java.time.Instant;
 import java.util.Collection;
+import java.util.Set;
 
-/** The notification center's storage. Every read and write is scoped to one recipient. */
+/** The notification center's storage, scoped to one recipient except {@link #deleteByActor}. */
 public interface NotificationRepository {
 
     /** Stores a new notification and returns it with its id. */
@@ -29,4 +30,13 @@ public interface NotificationRepository {
     Mono<Long> markGroupRead(String recipientId, String groupKey, Instant at);
 
     Mono<Long> markAllRead(String recipientId, Instant at);
+
+    /** Clears a user's own center; returns how many were deleted. */
+    Mono<Long> deleteByRecipient(String recipientId);
+
+    /** Deletes every notification the user acted in, in anyone's center; returns who lost one. */
+    Mono<Set<String>> deleteByActor(String actorId);
+
+    /** Removes one notification, only if it is the recipient's. */
+    Mono<Void> deleteOwned(String recipientId, String id);
 }

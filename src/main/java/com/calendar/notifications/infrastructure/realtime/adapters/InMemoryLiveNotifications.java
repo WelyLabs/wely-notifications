@@ -10,13 +10,7 @@ import reactor.util.concurrent.Queues;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-/**
- * Live updates passed in memory: one sink per connected user, dropped with their last connection.
- *
- * <p>Assumes a single replica, like wely-events' poll updates: a notification recorded by another pod
- * would never reach the clients connected here. Fanning out across pods would take a broadcast topic
- * with one consumer group per pod, as wely-chat does for messages.
- */
+/** Live updates in memory, one sink per connected user: they only reach this pod's clients. */
 @Component
 public class InMemoryLiveNotifications implements LiveNotifications {
 
@@ -45,6 +39,18 @@ public class InMemoryLiveNotifications implements LiveNotifications {
             });
             return channel.sink.asFlux().doFinally(signal -> leave(recipientId, channel));
         });
+    }
+
+    // Every tab's stream completes; their doFinally then finds no channel, or a newer one, and leaves it be.
+    @Override
+    public void close(String recipientId) {
+        Channel channel = channels.remove(recipientId);
+        if (channel == null) {
+            return;
+        }
+        synchronized (channel) {
+            channel.sink.tryEmitComplete();
+        }
     }
 
     private void leave(String recipientId, Channel channel) {

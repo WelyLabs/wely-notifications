@@ -1,5 +1,6 @@
 package com.calendar.notifications.configuration;
 
+import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.EventMembers;
 import com.calendar.notifications.domain.ports.LiveNotifications;
 import com.calendar.notifications.domain.ports.NotificationRepository;
@@ -7,6 +8,7 @@ import com.calendar.notifications.domain.ports.NotificationWording;
 import com.calendar.notifications.domain.ports.PreferencesRepository;
 import com.calendar.notifications.domain.ports.PushSender;
 import com.calendar.notifications.domain.ports.SubscriptionRepository;
+import com.calendar.notifications.domain.services.NotificationService;
 import com.calendar.notifications.domain.services.PushService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -37,14 +39,18 @@ class NotificationsApplicationConfigTest {
         NotificationRepository repository = mock(NotificationRepository.class);
         LiveNotifications live = mock(LiveNotifications.class);
         EventMembers eventMembers = mock(EventMembers.class);
+        DeletedUserMarkers markers = mock(DeletedUserMarkers.class);
         Clock clock = Clock.systemUTC();
 
-        PushService pushService = config.pushService(subscriptions, preferences, sender, clock);
+        PushService pushService = config.pushService(subscriptions, preferences, sender, markers, clock);
+        NotificationService notificationService = config.notificationService(repository, live, pushService,
+                mock(NotificationWording.class), markers, clock);
 
         assertThat(pushService).isNotNull();
-        assertThat(config.notificationService(repository, live, pushService, mock(NotificationWording.class), clock))
-                .isNotNull();
+        assertThat(notificationService).isNotNull();
         assertThat(config.eventMembershipService(eventMembers)).isNotNull();
-        verifyNoInteractions(subscriptions, preferences, sender, repository, live, eventMembers);
+        assertThat(config.accountErasureService(markers, repository, subscriptions, preferences, live,
+                notificationService, clock)).isNotNull();
+        verifyNoInteractions(subscriptions, preferences, sender, repository, live, eventMembers, markers);
     }
 }

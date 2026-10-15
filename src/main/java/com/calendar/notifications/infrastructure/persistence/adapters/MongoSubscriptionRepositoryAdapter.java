@@ -46,4 +46,11 @@ public class MongoSubscriptionRepositoryAdapter implements SubscriptionRepositor
     public Mono<Void> delete(String endpoint) {
         return repository.deleteById(endpoint).onErrorMap(StoreErrors::isStoreFailure, StoreErrors::unavailable);
     }
+
+    @Override
+    public Mono<Void> deleteByUser(String userId) {
+        return repository.deleteByUser(userId)
+                .then()
+                .onErrorMap(StoreErrors::isStoreFailure, StoreErrors::unavailable);
+    }
 }

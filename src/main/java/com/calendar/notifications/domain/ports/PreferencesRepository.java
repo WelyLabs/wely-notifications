@@ -9,4 +9,7 @@ public interface PreferencesRepository {
     Mono<NotificationPreferences> find(String userId);
 
     Mono<NotificationPreferences> save(NotificationPreferences preferences);
+
+    /** Forgets the user's choices; nothing saved is not an error. */
+    Mono<Void> delete(String userId);
 }

@@ -21,7 +21,7 @@ import java.time.temporal.ChronoUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Push subscriptions against a real MongoDB. Opt-in: {@code CI=true} or {@code -Dintegration.tests=true}. */
+/** Push subscriptions against a real MongoDB, opt-in with {@code CI=true} or {@code -Dintegration.tests=true}. */
 @Testcontainers
 @SpringBootTest(properties = "spring.data.mongodb.auto-index-creation=true")
 @ActiveProfiles("test")
@@ -83,6 +83,19 @@ class MongoSubscriptionRepositoryAdapterIntegrationTest {
 
         adapter.deleteOwned("bob", ENDPOINT).block();
         assertThat(adapter.findByUser("bob").collectList().block()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("every device of a user goes, and nobody else's")
+    void deleteByUser_shouldRemoveEveryDeviceOfTheUserOnly() {
+        adapter.save(device("bob", ENDPOINT)).block();
+        adapter.save(device("bob", ENDPOINT + "-2")).block();
+        adapter.save(device("carl", ENDPOINT + "-3")).block();
+
+        adapter.deleteByUser("bob").block();
+
+        assertThat(adapter.findByUser("bob").collectList().block()).isEmpty();
+        assertThat(adapter.findByUser("carl").collectList().block()).hasSize(1);
     }
 
     @Test

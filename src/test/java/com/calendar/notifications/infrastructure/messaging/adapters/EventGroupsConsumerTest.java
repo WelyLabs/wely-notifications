@@ -57,13 +57,13 @@ class EventGroupsConsumerTest {
     }
 
     @Test
-    @DisplayName("a deleted event keeps its version with nobody in it")
+    @DisplayName("a deleted event keeps its version with nobody in it and no title")
     void eventGroups_shouldEmptyADeletedEvent() {
         when(membershipService.apply(any())).thenReturn(Mono.just(true));
 
         consumer.eventGroups().accept(Flux.just(group("e1", 4, true)));
 
-        verify(membershipService, timeout(2000)).apply(new EventMembership("e1", "Bowling", List.of(), 4));
+        verify(membershipService, timeout(2000)).apply(new EventMembership("e1", null, List.of(), 4));
     }
 
     @Test

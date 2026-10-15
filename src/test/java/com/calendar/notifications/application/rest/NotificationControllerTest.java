@@ -8,6 +8,8 @@ import com.calendar.notifications.domain.models.LiveUpdate;
 import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.models.NotificationType;
 import com.calendar.notifications.domain.services.NotificationService;
+import com.calendar.notifications.exception.NotificationsErrorCode;
+import com.calendar.notifications.exception.NotificationsException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -91,11 +93,11 @@ class NotificationControllerTest {
     @Test
     @DisplayName("the stream sends unread and notification events, keep-alives, and tells nginx not to buffer")
     void stream_shouldSendNamedEventsAndKeepAlives() {
-        when(notificationService.stream("bob")).thenReturn(Flux.concat(
+        when(notificationService.openStream("bob")).thenReturn(Mono.just(Flux.concat(
                 Flux.just(new LiveUpdate.UnreadChanged(1), new LiveUpdate.NotificationAdded(notification())),
-                Flux.never()));
+                Flux.never())));
 
-        ResponseEntity<Flux<ServerSentEvent<Object>>> response = controller.stream(jwt);
+        ResponseEntity<Flux<ServerSentEvent<Object>>> response = controller.stream(jwt).block();
 
         assertThat(response.getHeaders().getFirst("X-Accel-Buffering")).isEqualTo("no");
         StepVerifier.create(response.getBody())
@@ -110,5 +112,42 @@ class NotificationControllerTest {
                 .assertNext(event -> assertThat(event.comment()).isEqualTo(NotificationController.KEEP_ALIVE_COMMENT))
                 .thenCancel()
                 .verify(Duration.ofSeconds(2));
+    }
+
+    @Test
+    @DisplayName("the response ends when the updates do: keep-alives never hold a closed channel open")
+    void stream_shouldEndTheResponse_whenTheUpdatesComplete() {
+        when(notificationService.openStream("bob"))
+                .thenReturn(Mono.just(Flux.concat(Flux.just(new LiveUpdate.UnreadChanged(1)),
+                        Mono.delay(Duration.ofMillis(120)).then(Mono.empty()))));
+
+        StepVerifier.create(controller.stream(jwt).flatMapMany(ResponseEntity::getBody))
+                .assertNext(event -> assertThat(event.event()).isEqualTo(NotificationController.UNREAD_EVENT))
+                .thenConsumeWhile(event -> NotificationController.KEEP_ALIVE_COMMENT.equals(event.comment()))
+                .expectComplete()
+                .verify(Duration.ofSeconds(2));
+    }
+
+    @Test
+    @DisplayName("the response ends with the error when the updates fail")
+    void stream_shouldEndTheResponseWithTheError_whenTheUpdatesFail() {
+        when(notificationService.openStream("bob"))
+                .thenReturn(Mono.just(Flux.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE))));
+
+        StepVerifier.create(controller.stream(jwt).flatMapMany(ResponseEntity::getBody))
+                .expectError(NotificationsException.class)
+                .verify(Duration.ofSeconds(2));
+    }
+
+    @Test
+    @DisplayName("a deleted account fails before any response is written, so the advice answers 410")
+    void stream_shouldFailBeforeAnyResponse_whenTheAccountIsErased() {
+        when(notificationService.openStream("bob"))
+                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.ACCOUNT_DELETED)));
+
+        StepVerifier.create(controller.stream(jwt))
+                .expectErrorSatisfies(error -> assertThat(((NotificationsException) error).getErrorCode())
+                        .isEqualTo(NotificationsErrorCode.ACCOUNT_DELETED))
+                .verify();
     }
 }

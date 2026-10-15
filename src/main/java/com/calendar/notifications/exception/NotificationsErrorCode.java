@@ -2,12 +2,7 @@ package com.calendar.notifications.exception;
 
 import org.springframework.http.HttpStatus;
 
-/**
- * Outcomes this service refuses on, each with a stable code.
- *
- * <p>{@code code} is the contract a client branches on; {@code title} and {@code detail} are English,
- * for whoever reads the response or the logs.
- */
+/** Outcomes this service refuses on, each with the stable code a client branches on. */
 public enum NotificationsErrorCode {
 
     SUBSCRIPTION_INVALID(
@@ -15,6 +10,12 @@ public enum NotificationsErrorCode {
             "Push subscription invalid",
             "The endpoint must be an https URL, p256dh a P-256 public key and auth a 16-byte secret, base64url-encoded.",
             HttpStatus.BAD_REQUEST),
+
+    ACCOUNT_DELETED(
+            "NTF-BUS-002",
+            "Account deleted",
+            "This account has been deleted.",
+            HttpStatus.GONE),
 
     STORE_UNAVAILABLE(
             "NTF-TEC-001",

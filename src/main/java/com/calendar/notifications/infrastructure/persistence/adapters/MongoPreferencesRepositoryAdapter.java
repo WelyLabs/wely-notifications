@@ -31,4 +31,9 @@ public class MongoPreferencesRepositoryAdapter implements PreferencesRepository 
                 .map(mapper::toDomain)
                 .onErrorMap(StoreErrors::isStoreFailure, StoreErrors::unavailable);
     }
+
+    @Override
+    public Mono<Void> delete(String userId) {
+        return repository.deleteById(userId).onErrorMap(StoreErrors::isStoreFailure, StoreErrors::unavailable);
+    }
 }

@@ -54,4 +54,53 @@ class InMemoryLiveNotificationsTest {
 
         assertThat(live.channelCount()).isZero();
     }
+
+    @Test
+    @DisplayName("closing a user's channel completes every one of their open streams")
+    void close_shouldCompleteEveryStreamOfTheUser() {
+        var firstTab = live.stream("bob").collectList().toFuture();
+
+        StepVerifier.create(live.stream("bob"))
+                .then(() -> live.close("bob"))
+                .verifyComplete();
+
+        assertThat(firstTab.join()).isEmpty();
+        assertThat(live.channelCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("closing one user's channel leaves the others connected")
+    void close_shouldLeaveOtherUsersConnected() {
+        StepVerifier.create(live.stream("carl"))
+                .then(() -> {
+                    live.close("bob");
+                    live.publish("carl", new LiveUpdate.UnreadChanged(4));
+                })
+                .expectNext(new LiveUpdate.UnreadChanged(4))
+                .thenCancel()
+                .verify(Duration.ofSeconds(2));
+    }
+
+    @Test
+    @DisplayName("closing a user who is not connected does nothing")
+    void close_shouldDoNothing_whenTheUserIsNotConnected() {
+        live.close("bob");
+
+        assertThat(live.channelCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("a stream opened after the close starts on a new channel")
+    void close_shouldDropTheChannel_soALaterStreamStartsAfresh() {
+        var closedTab = live.stream("bob").collectList().toFuture();
+        live.close("bob");
+        assertThat(closedTab.join()).isEmpty();
+
+        StepVerifier.create(live.stream("bob"))
+                .then(() -> live.publish("bob", new LiveUpdate.UnreadChanged(5)))
+                .expectNext(new LiveUpdate.UnreadChanged(5))
+                .thenCancel()
+                .verify(Duration.ofSeconds(2));
+        assertThat(live.channelCount()).isZero();
+    }
 }

@@ -2,6 +2,7 @@ package com.calendar.notifications.infrastructure.messaging.adapters;
 
 import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.models.NotificationType;
+import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.NotificationRepository;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
@@ -24,19 +25,14 @@ import org.testcontainers.kafka.KafkaContainer;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
-/**
- * One record through a real Kafka into a real MongoDB: the binding names, the byte payload, the shared
- * group and the consumer's wiring all fail silently when wrong. An unreadable record goes first, to
- * prove it does not stop the stream.
- *
- * <p>Opt-in: CI sets {@code CI=true}, locally pass {@code -Dintegration.tests=true}.
- */
+/** {@code FRIENDSHIP_CHANGED} through a real Kafka into a real MongoDB, after an unreadable record. */
 @Testcontainers
 @SpringBootTest(properties = {
         "app.consumers.enabled=true",
@@ -69,19 +65,26 @@ class FriendshipsConsumerIntegrationTest {
     @Autowired
     private NotificationRepository repository;
 
-    @Test
-    @DisplayName("a friend request published on the topic lands in the requested user's notification center")
-    void friendships_shouldTurnARecordIntoAStoredNotification() {
+    @Autowired
+    private DeletedUserMarkers markers;
+
+    private static void publish(String... payloads) {
         try (KafkaProducer<String, byte[]> producer = new KafkaProducer<>(Map.of(
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers(),
                 ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class,
                 ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class))) {
-            producer.send(new ProducerRecord<>("FRIENDSHIP_CHANGED_IT", "bob",
-                    "{broken".getBytes(StandardCharsets.UTF_8)));
-            producer.send(new ProducerRecord<>("FRIENDSHIP_CHANGED_IT", "bob", """
-                    {"type":"REQUESTED","fromUserId":"lea","fromUserName":"Léa","toUserId":"bob"}"""
-                    .getBytes(StandardCharsets.UTF_8)));
+            for (String payload : payloads) {
+                producer.send(new ProducerRecord<>("FRIENDSHIP_CHANGED_IT", "bob",
+                        payload.getBytes(StandardCharsets.UTF_8)));
+            }
         }
+    }
+
+    @Test
+    @DisplayName("a friend request published on the topic lands in the requested user's notification center")
+    void friendships_shouldTurnARecordIntoAStoredNotification() {
+        publish("{broken", """
+                {"type":"REQUESTED","fromUserId":"lea","fromUserName":"Léa","toUserId":"bob"}""");
 
         await().atMost(Duration.ofSeconds(60)).untilAsserted(() -> {
             List<Notification> page = repository.findPage("bob", null, 10).collectList().block();
@@ -89,5 +92,20 @@ class FriendshipsConsumerIntegrationTest {
             assertThat(page.getFirst().type()).isEqualTo(NotificationType.FRIEND_REQUEST);
             assertThat(page.getFirst().body()).isEqualTo("Léa veut être ton ami");
         });
+    }
+
+    @Test
+    @DisplayName("a late request from a deleted account creates nothing; the next record still notifies")
+    void friendships_shouldCreateNothing_forAnErasedRequester() {
+        markers.markDeleted("gone", Instant.now()).block();
+
+        publish("""
+                {"type":"REQUESTED","fromUserId":"gone","fromUserName":"Gone","toUserId":"dan"}""", """
+                {"type":"REQUESTED","fromUserId":"eve","fromUserName":"Ève","toUserId":"dan"}""");
+
+        // Records are read in order: once Ève's request is stored, the deleted one was read and dropped.
+        await().atMost(Duration.ofSeconds(60)).untilAsserted(() ->
+                assertThat(repository.findPage("dan", null, 10).collectList().block())
+                        .extracting(Notification::actorId).containsExactly("eve"));
     }
 }

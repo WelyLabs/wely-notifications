@@ -20,6 +20,7 @@ import java.util.Map;
 
 import static com.calendar.notifications.infrastructure.persistence.adapters.MongoNotificationRepositoryAdapterTest.assertStoreUnavailable;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -56,12 +57,24 @@ class MongoPreferencesRepositoryAdapterTest {
     }
 
     @Test
+    @DisplayName("preferences are deleted by user")
+    void delete_shouldDeleteByUser() {
+        when(repository.deleteById("bob")).thenReturn(Mono.empty());
+
+        StepVerifier.create(adapter.delete("bob")).verifyComplete();
+
+        verify(repository).deleteById("bob");
+    }
+
+    @Test
     @DisplayName("a MongoDB failure reaches the domain as NTF-TEC-001")
     void everyMethod_shouldTranslateStoreFailures() {
         when(repository.findById(any(String.class))).thenReturn(Mono.error(new DataAccessResourceFailureException("down")));
         when(repository.save(any())).thenReturn(Mono.error(new DataAccessResourceFailureException("down")));
+        when(repository.deleteById(any(String.class))).thenReturn(Mono.error(new DataAccessResourceFailureException("down")));
 
         assertStoreUnavailable(adapter.find("bob"));
         assertStoreUnavailable(adapter.save(PREFERENCES));
+        assertStoreUnavailable(adapter.delete("bob"));
     }
 }

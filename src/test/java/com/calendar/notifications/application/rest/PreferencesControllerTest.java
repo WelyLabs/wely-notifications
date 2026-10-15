@@ -5,6 +5,8 @@ import com.calendar.notifications.application.mappers.PreferencesRestMapper;
 import com.calendar.notifications.domain.models.NotificationCategory;
 import com.calendar.notifications.domain.models.NotificationPreferences;
 import com.calendar.notifications.domain.services.PushService;
+import com.calendar.notifications.exception.NotificationsErrorCode;
+import com.calendar.notifications.exception.NotificationsException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -18,6 +20,7 @@ import reactor.test.StepVerifier;
 
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
@@ -56,5 +59,17 @@ class PreferencesControllerTest {
         StepVerifier.create(controller.update(jwt, new PreferencesDTO(false, true, true, true)))
                 .expectNext(new PreferencesDTO(false, true, true, true))
                 .verifyComplete();
+    }
+
+    @Test
+    @DisplayName("a deleted account's refusal reaches the advice unchanged")
+    void update_shouldPropagateTheRefusal_whenTheAccountIsErased() {
+        when(pushService.updatePreferences(eq("bob"), any()))
+                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.ACCOUNT_DELETED)));
+
+        StepVerifier.create(controller.update(jwt, new PreferencesDTO(true, true, true, true)))
+                .expectErrorSatisfies(error -> assertThat(((NotificationsException) error).getErrorCode())
+                        .isEqualTo(NotificationsErrorCode.ACCOUNT_DELETED))
+                .verify();
     }
 }

@@ -13,7 +13,7 @@ Il écoute ce qui se passe ailleurs — un appel qui sonne, un message, la date 
 | **Port** | 8087 |
 | **Préfixe HTTP** | `/notifications-service` (la gateway route `/api/v1/notifications-service/**`) |
 | **Persistance** | MongoDB `notifications_db` |
-| **Entrées** | Kafka : `CALL_EVENTS`, `MESSAGE_BROADCAST`, `EVENT_GROUP_CHANGED`, `EVENT_DATE_FIXED`, `FRIENDSHIP_CHANGED` |
+| **Inputs** | Kafka: `CALL_EVENTS`, `MESSAGE_BROADCAST`, `EVENT_GROUP_CHANGED`, `EVENT_DATE_FIXED`, `FRIENDSHIP_CHANGED`, `USER_DELETED` |
 | **Sorties** | REST, flux SSE, Web Push (RFC 8030/8291/8292) |
 
 ---
@@ -41,10 +41,11 @@ graph LR
     CHAT["wely-chat"] -->|"CALL_EVENTS<br/>MESSAGE_BROADCAST"| K{{Kafka}}
     EVT["wely-events"] -->|"EVENT_GROUP_CHANGED<br/>EVENT_DATE_FIXED"| K
     SOC["wely-social"] -->|"FRIENDSHIP_CHANGED"| K
+    USR["wely-users"] -->|"USER_DELETED"| K
 
     K -->|"groupe partagé<br/>notifications-service-group"| N["wely-notifications :8087"]
 
-    N --> DB[("MongoDB<br/>notifications · push_subscriptions<br/>notification_preferences · event_members")]
+    N --> DB[("MongoDB<br/>notifications · push_subscriptions<br/>notification_preferences · event_members<br/>deleted_users")]
     N -->|"SSE /notifications/stream"| WEB["onglets ouverts"]
     N -->|"Web Push chiffré + VAPID"| PS["service push du navigateur<br/>(FCM, Mozilla, Apple)"]
     PS --> SW["service worker<br/>appareil fermé"]
@@ -55,14 +56,17 @@ graph LR
   Kafka (octets) ──────▶│ infrastructure/messaging                             │
                         │   CallEvents · Messages · EventGroups · EventDates   │
                         │   Friendships consumers  →  NotificationDrafts (FR)  │
+                        │   UserDeleted consumer   →  AccountErasureService    │
                         └──────────────────────┬───────────────────────────────┘
   REST / SSE ──────────▶ application/rest      │ Notification (brouillon)
                         ┌──────────────────────▼───────────────────────────────┐
                         │ domain/                                              │
                         │   services/ NotificationService · PushService        │
-                        │             EventMembershipService       (POJO)      │
+                        │             EventMembershipService                   │
+                        │             AccountErasureService        (POJO)      │
                         │   ports/    NotificationRepository · Subscription…   │
-                        │             LiveNotifications · PushSender · …       │
+                        │             LiveNotifications · PushSender           │
+                        │             DeletedUserMarkers · …                   │
                         └─────▲──────────────────▲───────────────────▲─────────┘
                               │                  │                   │
             ┌─────────────────┴───┐  ┌───────────┴──────────┐  ┌─────┴─────────────────┐
@@ -75,6 +79,7 @@ graph LR
 
 `NotificationService.notify` :
 
+0. drops the notification when its recipient or its actor is a **deleted account** (see [Account deletion](#account-deletion));
 1. enregistre la notification, ou la **regroupe** avec la notification non lue de la même conversation ;
 2. la pousse sur le flux SSE de son destinataire, suivie du nouveau compteur de non-lus ;
 3. l'envoie en Web Push à chacun de ses appareils, si la catégorie est activée dans ses préférences.
@@ -98,12 +103,12 @@ Toutes les routes exigent un JWT ; l'utilisateur est **toujours** le claim `busi
 | `GET` | `/notifications?before=<instant ISO>&limit=30` | — | **200** `NotificationDTO[]`, plus récentes d'abord ; `limit` ramené entre 1 et 100 |
 | `GET` | `/notifications/unread-count` | — | **200** `{ "count" }` |
 | `POST` | `/notifications/read` | `{ "ids": [...] }` **ou** `{ "groupKey": "…" }` **ou** `{ "all": true }` | **204** ; plusieurs sélecteurs ou aucun → **400** `NTF-VAL-001` |
-| `GET` | `/notifications/stream` | — | `text/event-stream` (voir plus bas) |
+| `GET` | `/notifications/stream` | — | `text/event-stream` (see below); deleted account → **410** `NTF-BUS-002` |
 | `GET` | `/push/public-key` | — | **200** `{ "publicKey" }`, vide si le push n'est pas configuré |
-| `PUT` | `/push/subscriptions` | `{ "endpoint", "keys": { "p256dh", "auth" }, "label"? }` | **204** ; même endpoint → remplacé et rattaché à l'appelant |
+| `PUT` | `/push/subscriptions` | `{ "endpoint", "keys": { "p256dh", "auth" }, "label"? }` | **204**; same endpoint → replaced and moved to the caller; deleted account → **410** `NTF-BUS-002` |
 | `DELETE` | `/push/subscriptions?endpoint=…` | — | **204** ; n'efface que l'appareil de l'appelant |
 | `GET` | `/preferences` | — | **200** `{ "calls", "messages", "events", "friends" }` |
-| `PUT` | `/preferences` | les quatre booléens | **200**, l'écho de ce qui est enregistré |
+| `PUT` | `/preferences` | the four booleans | **200**, echoing what was saved; deleted account → **410** `NTF-BUS-002` |
 
 `NotificationDTO` : `{ id, type, category, title, body, link, groupKey, count, actorId, createdAt, readAt }`. `link` est une route de l'application web (`/call/{id}`, `/chat/{id}`, `/event/{id}`, `/friends/{id}`).
 
@@ -120,6 +125,8 @@ data: {"id":"…","type":"MESSAGE","category":"MESSAGES","title":"Léa · 2 nouv
 ```
 
 Un événement `unread` part dès la connexion, puis à chaque changement. Un commentaire toutes les 20 s garde la connexion ouverte à travers les proxys, et l'en-tête `X-Accel-Buffering: no` empêche nginx de la mettre en tampon — comme le flux des sondages de `wely-events`.
+
+The comments are merged with the updates as signals (`materialize` / `dematerialize`): when the user's channel is closed, the HTTP response ends instead of being held open forever by the comments alone. A deleted account gets **410** as `application/problem+json` before the stream opens; the content type is set explicitly, otherwise the `text/event-stream` route would encode the error as an event.
 
 ### Types et catégories
 
@@ -190,6 +197,8 @@ L'appel manqué porte **le même tag** que l'appel entrant : sur l'appareil, il 
 
 Un seul groupe, **partagé** par toutes les répliques : `notifications-service-group`, démarrant au dernier offset pour un groupe nouveau — un premier déploiement ne rejoue pas l'historique. Les enregistrements arrivent en **octets** et sont lus un par un dans un `concatMap` : un enregistrement illisible ou un échec d'écriture est journalisé et abandonné seul, sans arrêter le flux (même modèle que les consommateurs de `wely-chat`).
 
+Only `USER_DELETED` starts from the **earliest** offset: a deletion published before its binding first joined the group must still be erased.
+
 | Topic (variable) | Charge utile | Effet |
 |---|---|---|
 | `CALL_EVENTS_TOPIC` | `{type, recipientId, actorId, call{id, conversationId, startedBy, media, status, …}}` | `RINGING` → `CALL_INCOMING` ; `ENDED` + `MISSED` → `CALL_MISSED` |
@@ -197,8 +206,46 @@ Un seul groupe, **partagé** par toutes les répliques : `notifications-service-
 | `EVENT_GROUP_TOPIC` | `{eventId, title, organizerId, memberIds, version, deleted}` | met à jour la projection versionnée `event_members` ; une version plus ancienne est ignorée, un événement supprimé garde sa version et plus aucun membre |
 | `EVENT_DATE_FIXED_TOPIC` | `{eventId, title, start, end, organizerId, previousStart, previousEnd}` | `EVENT_DATE_FIXED` ou `EVENT_MOVED` à chaque membre sauf l'organisateur, date en français dans `NOTICES_ZONE` ; événement inconnu de la projection → ignoré et journalisé |
 | `FRIENDSHIP_TOPIC` | `{type: REQUESTED\|ACCEPTED, fromUserId, fromUserName, toUserId}` | `FRIEND_REQUEST` ou `FRIEND_ACCEPTED` à `toUserId` |
+| `USER_DELETED_TOPIC` | `{userId, deletedAt}` (`deletedAt` missing from older records) | erases the account, see [Account deletion](#account-deletion) |
 
 La projection `event_members` existe parce que `EVENT_DATE_FIXED` ne porte pas la liste des membres.
+A deleted event keeps its version there, with no member **and no title**.
+
+`USER_DELETED` is consumed by a `Function<Flux<Message<byte[]>>, Mono<Void>>`, not a `Consumer`: the binder subscribes to the result itself, with no manual `subscribe()`, and creates no output binding (the integration test asserts it). The other five consumers still subscribe themselves.
+
+---
+
+## Account deletion
+
+When `wely-users` deletes an account, it publishes `USER_DELETED`. This service then erases what it holds about that account, in **idempotent** steps, since MongoDB gives no transaction here:
+
+1. **marker** `deleted_users` `{_id: businessId, deletedAt, erasedAt}`, inserted if absent (the first `deletedAt` wins): every guard below is live before anything is deleted;
+2. **closing the user's SSE streams**, in every tab;
+3. **devices** (`push_subscriptions`), first: nothing can be pushed while the rest is deleted;
+4. **preferences** (`notification_preferences`);
+5. **their own center**: the notifications they are the recipient of;
+6. **the notifications they caused** for others (`actorId`, indexed): messages, calls, friend requests, event dates. Each affected recipient is sent their new unread count live;
+7. `erasedAt`, last: an erasure cut short stays visibly unfinished.
+
+A failure is retried five times with a growing delay (1 s, up to 30 s), then logged; the stream moves on to the next record. Replaying a record redoes deletions that no longer match anything.
+
+**Guards.** The marker is permanent; it holds only the `businessId`, which the other services already keep as a pseudonym.
+
+- `notify` creates nothing for a deleted recipient or actor: a message, a call or a friend request arriving late on Kafka recreates nothing.
+- Every write checks the marker **before** and again **after** writing: if the erasure started in between, what was just written is removed. `notify` then neither streams nor pushes the notification; `PUT /push/subscriptions` and `PUT /preferences` delete the device or the preferences again and answer **410**. If the second check sees no marker, the marker and the erasure's deletions come after the write and win.
+- `PUT /push/subscriptions`, `PUT /preferences` and `GET /notifications/stream` answer **410** `NTF-BUS-002` to a still-valid token of a deleted account. Reads and deletions stay open: they recreate nothing.
+- A stream reads the marker again once it has joined the user's channel, and closes the channel if the account is deleted: an erasure that closed the channel just before the join cannot leave a stream open.
+
+`event_members` is not edited locally: `wely-events` republishes `EVENT_GROUP_CHANGED` without the deleted account for upcoming events, and the versioned projection follows. Past events keep the id as a pseudonym; `notify` drops the notices that would be addressed to it.
+
+**Residual copies**, out of this service's reach:
+
+| Copy | Lifetime |
+|---|---|
+| Messages already handed to the push services (FCM, Mozilla, Apple) | 24 h at most (30 s for a call) |
+| Notifications already shown by the device's system | until the user dismisses them |
+| Kafka records of the consumed topics | each topic's retention, set in `wely-gitops-infra` |
+| Pod logs (`businessId`) | until the logs rotate |
 
 ---
 
@@ -207,6 +254,7 @@ La projection `event_members` existe parce que `EVENT_DATE_FIXED` ne porte pas l
 | Code | HTTP | Signification |
 |---|---|---|
 | `NTF-BUS-001` | 400 | Abonnement push inutilisable : endpoint non `https`, `p256dh` qui n'est pas un point P-256, `auth` qui ne fait pas 16 octets |
+| `NTF-BUS-002` | 410 | Account deleted: push subscription, preferences or stream refused |
 | `NTF-TEC-001` | 502 | MongoDB injoignable |
 | `NTF-VAL-001` | 400 | Validation du corps JSON, détail par champ |
 | `NTF-REQ-000` | *repris* | Chemin inconnu, méthode non autorisée, paramètre manquant |
@@ -241,8 +289,9 @@ Toutes les réponses d'erreur sont des `ProblemDetail` (RFC 7807), avec `code` e
 | `EVENT_GROUP_TOPIC` | `EVENT_GROUP_CHANGED` | Membres des sorties, de `wely-events` |
 | `EVENT_DATE_FIXED_TOPIC` | `EVENT_DATE_FIXED` | Dates fixées ou décalées, de `wely-events` |
 | `FRIENDSHIP_TOPIC` | `FRIENDSHIP_CHANGED` | Demandes d'ami, de `wely-social` |
+| `USER_DELETED_TOPIC` | `USER_DELETED` | Deleted accounts, from `wely-users` |
 | `NOTICES_ZONE` | `Europe/Paris` | Fuseau des dates écrites dans les notifications |
-| `NOTIFICATIONS_CONSUMERS_ENABLED` | `true` | Coupe les cinq consommateurs Kafka |
+| `NOTIFICATIONS_CONSUMERS_ENABLED` | `true` | Turns off the six Kafka consumers |
 
 **Sans clés VAPID, le push est désactivé** — un avertissement au démarrage, `GET /push/public-key` rend une chaîne vide — mais le centre de notifications et le flux SSE fonctionnent. Une paire de clés malformée désactive aussi le push au lieu d'empêcher le démarrage.
 
@@ -280,6 +329,8 @@ kubectl apply -k overlays/local --server-side
 
 Les classes `*IntegrationTest` démarrent un vrai MongoDB et un vrai Kafka (Testcontainers) : regroupement atomique sous concurrence, index partiel, pagination et filtrage par destinataire, projection versionnée, abonnements, et un aller-retour Kafka → MongoDB précédé d'un enregistrement illisible. Elles tournent en CI (`CI=true`) ou avec `-Dintegration.tests=true`, et exigent un démon Docker.
 
+They also cover the deleted-account markers, deletions by actor, a late friend request from a deleted account, and a full `USER_DELETED` erasure on a topic the binder may not create, with no output binding.
+
 > **Note build :** ce service produit dans `target-maven/` et non `target/` en local.
 
 ---
@@ -287,7 +338,9 @@ Les classes `*IntegrationTest` démarrent un vrai MongoDB et un vrai Kafka (Test
 ## Limites connues
 
 - **Une seule réplique.** Les consommateurs Kafka partagent un groupe, ils passeraient à l'échelle ; mais le flux SSE est un `Sink` **en mémoire** par utilisateur : une notification enregistrée par un pod n'atteint pas les onglets connectés à un autre. Plusieurs répliques demanderaient une diffusion entre pods (un topic à un groupe par pod, comme `wely-chat` pour ses messages).
+- **Closing a deleted account's streams is per pod.** Only the streams open on the pod that reads `USER_DELETED` are closed; with several replicas, a stream open on another pod would stay open.
 - **Pas de nom pour l'appelant.** Les événements d'appel ne portent que des identifiants et ce service ne tient pas d'annuaire : la notification dit « Appel vidéo — On t'appelle sur Wely », sans dire qui. Les messages et les demandes d'ami, eux, portent le nom de l'émetteur.
 - **Au plus une fois, sans outbox côté producteurs.** Un enregistrement en échec est abandonné après journalisation (avec trois nouvelles tentatives pour la projection des membres). Une notification manquée n'est pas rejouée.
+- **No erasure catch-up yet.** A `USER_DELETED` still failing after five attempts, or lost to a pod stopping mid-way, leaves a marker without `erasedAt` (or no marker at all): nothing replays it automatically yet.
 - **Pas de purge.** Les notifications lues restent en base ; un index TTL sur `readAt` serait la prochaine étape.
 - **Un seul fuseau horaire** pour les dates écrites, comme les notices de `wely-chat`.
