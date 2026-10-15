@@ -24,7 +24,6 @@ class PushMessageTest {
         assertThat(push.requireInteraction()).isTrue();
         assertThat(push.ttlSeconds()).isEqualTo(PushMessage.CALL_TTL_SECONDS);
         assertThat(push.urgency()).isEqualTo(PushUrgency.HIGH);
-        assertThat(push.topic()).isEqualTo("call-call42");
         assertThat(push.title()).isEqualTo("Title");
         assertThat(push.body()).isEqualTo("Body");
         assertThat(push.link()).isEqualTo("/link");
@@ -57,14 +56,5 @@ class PushMessageTest {
     @DisplayName("anything else is tagged by its own id")
     void of_shouldTagOtherNotificationsByTheirId() {
         assertThat(PushMessage.of(stored(NotificationType.FRIEND_REQUEST, null)).tag()).isEqualTo("n-1");
-    }
-
-    @Test
-    @DisplayName("a tag too long or with other characters is no topic")
-    void of_shouldLeaveTheTopicOutWhenTheTagCannotBeOne() {
-        String uuid = "0d9f6c8e-7a44-4b4e-9b0b-2f7f4c1d3e21";
-
-        assertThat(PushMessage.of(stored(NotificationType.MESSAGE, uuid)).topic()).isNull();
-        assertThat(PushMessage.of(stored(NotificationType.MESSAGE, "a.b")).topic()).isNull();
     }
 }

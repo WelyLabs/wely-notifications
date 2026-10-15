@@ -18,7 +18,7 @@ class PushPayloadMapperTest {
     @DisplayName("the payload keeps what the service worker shows, and leaves out the delivery settings")
     void toPayload_shouldKeepWhatTheServiceWorkerReads() {
         PushMessage message = new PushMessage("Léa", "Salut", "conv-c1", "/chat/c1", NotificationType.MESSAGE,
-                false, 86_400, PushUrgency.NORMAL, "conv-c1");
+                false, 86_400, PushUrgency.NORMAL);
 
         assertThat(mapper.toPayload(message))
                 .isEqualTo(new PushPayload("Léa", "Salut", "conv-c1", "/chat/c1", "MESSAGE", false));

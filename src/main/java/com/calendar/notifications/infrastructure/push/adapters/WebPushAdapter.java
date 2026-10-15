@@ -93,11 +93,6 @@ public class WebPushAdapter implements PushSender {
                 .header("Content-Encoding", AES128GCM)
                 .header("TTL", String.valueOf(message.ttlSeconds()))
                 .header("Urgency", message.urgency().name().toLowerCase())
-                .headers(headers -> {
-                    if (message.topic() != null) {
-                        headers.set("Topic", message.topic());
-                    }
-                })
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
                 .bodyValue(body)
                 .exchangeToMono(response -> {

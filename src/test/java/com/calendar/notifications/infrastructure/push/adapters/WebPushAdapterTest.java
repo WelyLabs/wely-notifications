@@ -112,7 +112,7 @@ class WebPushAdapterTest {
     }
 
     @Test
-    @DisplayName("a push is POSTed to the endpoint, VAPID-signed, aes128gcm-encrypted, with its TTL, urgency and topic")
+    @DisplayName("a push is POSTed to the endpoint, VAPID-signed, aes128gcm-encrypted, with its TTL and urgency")
     void send_shouldPostAnEncryptedSignedPush() throws Exception {
         StepVerifier.create(adapter().send(device(UA_PUBLIC), ringing()))
                 .expectNext(PushResult.DELIVERED)
@@ -126,7 +126,8 @@ class WebPushAdapterTest {
         assertThat(request.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_OCTET_STREAM);
         assertThat(request.getHeaders().getFirst("TTL")).isEqualTo("30");
         assertThat(request.getHeaders().getFirst("Urgency")).isEqualTo("high");
-        assertThat(request.getHeaders().getFirst("Topic")).isEqualTo("call-k1");
+        // No Topic: Apple refuses ours (BadWebPushTopic).
+        assertThat(request.getHeaders().containsHeader("Topic")).isFalse();
 
         JsonNode payload = objectMapper.readTree(decryptAsBrowser(bodyOf(request)));
         assertThat(payload.get("title").asString()).isEqualTo("Appel vidéo");
@@ -138,14 +139,13 @@ class WebPushAdapterTest {
     }
 
     @Test
-    @DisplayName("a push without a topic sends no Topic header, at normal urgency for a day")
-    void send_shouldOmitTheTopic_whenTheMessageHasNone() {
+    @DisplayName("anything but a call goes at normal urgency for a day")
+    void send_shouldUseNormalUrgency_forAnythingButACall() {
         StepVerifier.create(adapter().send(device(UA_PUBLIC), friendRequest()))
                 .expectNext(PushResult.DELIVERED)
                 .verifyComplete();
 
         MockClientHttpRequest request = sent.getFirst();
-        assertThat(request.getHeaders().containsHeader("Topic")).isFalse();
         assertThat(request.getHeaders().getFirst("Urgency")).isEqualTo("normal");
         assertThat(request.getHeaders().getFirst("TTL")).isEqualTo("86400");
     }
