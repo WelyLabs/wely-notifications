@@ -34,6 +34,7 @@ public class WebPushAdapter implements PushSender {
 
     private static final Logger log = LoggerFactory.getLogger(WebPushAdapter.class);
     private static final String AES128GCM = "aes128gcm";
+    private static final int MAX_REASON_LENGTH = 300;
 
     private final WebClient webClient;
     private final PushPayloadMapper payloadMapper;
@@ -99,7 +100,21 @@ public class WebPushAdapter implements PushSender {
                 })
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
                 .bodyValue(body)
-                .exchangeToMono(response -> response.releaseBody().thenReturn(resultOf(response.statusCode())));
+                .exchangeToMono(response -> {
+                    PushResult result = resultOf(response.statusCode());
+                    if (result != PushResult.FAILED) {
+                        return response.releaseBody().thenReturn(result);
+                    }
+                    // The push service says why in the body (Apple: {"reason": "BadWebPushTopic"}).
+                    return response.bodyToMono(String.class).defaultIfEmpty("")
+                            .doOnNext(reason -> log.warn("Push service {} answered {}: {}", URI.create(endpoint).getHost(),
+                                    response.statusCode().value(), abbreviated(reason)))
+                            .thenReturn(result);
+                });
+    }
+
+    private static String abbreviated(String body) {
+        return body.length() <= MAX_REASON_LENGTH ? body : body.substring(0, MAX_REASON_LENGTH) + "…";
     }
 
     /** 404 and 410 mean the browser unsubscribed or the subscription expired: forget it. */
@@ -110,7 +125,6 @@ public class WebPushAdapter implements PushSender {
         if (status.value() == HttpStatus.NOT_FOUND.value() || status.value() == HttpStatus.GONE.value()) {
             return PushResult.GONE;
         }
-        log.warn("Push service answered {}", status.value());
         return PushResult.FAILED;
     }
 

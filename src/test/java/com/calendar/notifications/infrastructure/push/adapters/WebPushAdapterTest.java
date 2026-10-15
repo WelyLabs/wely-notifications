@@ -238,6 +238,15 @@ class WebPushAdapterTest {
     }
 
     @Test
+    @DisplayName("a refusal is a failure, its reason read rather than left in the connection")
+    void send_shouldReadTheReason_whenThePushServiceRefuses() {
+        answer = () -> Mono.just(ClientResponse.create(HttpStatus.BAD_REQUEST)
+                .header("Content-Type", "application/json").body("{\"reason\":\"BadWebPushTopic\"}").build());
+
+        StepVerifier.create(adapter().send(device(UA_PUBLIC), ringing())).expectNext(PushResult.FAILED).verifyComplete();
+    }
+
+    @Test
     @DisplayName("success codes are deliveries")
     void resultOf_shouldTreatEvery2xxAsDelivered() {
         assertThat(WebPushAdapter.resultOf(HttpStatus.OK)).isEqualTo(PushResult.DELIVERED);
