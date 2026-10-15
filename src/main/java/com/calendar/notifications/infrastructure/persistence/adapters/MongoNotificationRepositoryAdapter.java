@@ -4,6 +4,7 @@ import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.ports.NotificationRepository;
 import com.calendar.notifications.infrastructure.persistence.entities.NotificationEntity;
 import com.calendar.notifications.infrastructure.persistence.mappers.NotificationPersistenceMapper;
+import com.calendar.notifications.infrastructure.persistence.projections.NotificationRecipient;
 import com.calendar.notifications.infrastructure.persistence.repositories.NotificationMongoRepository;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Limit;
@@ -13,14 +14,11 @@ import reactor.core.publisher.Mono;
 
 import java.time.Instant;
 import java.util.Collection;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
-/**
- * Notifications in MongoDB. Ids are UUIDs given here, so a client can send them back as plain strings.
- *
- * <p>Grouping is a conditional update, then an insert when no group is open. Two messages racing
- * both find no group; the unique partial index lets one insert win, and the other merges into it.
- */
+/** Notifications in MongoDB, with UUID ids so a client can send them back as plain strings. */
 @Component
 public class MongoNotificationRepositoryAdapter implements NotificationRepository {
 
@@ -74,6 +72,28 @@ public class MongoNotificationRepositoryAdapter implements NotificationRepositor
     @Override
     public Mono<Long> markAllRead(String recipientId, Instant at) {
         return repository.markAllRead(recipientId, at).onErrorMap(StoreErrors::isStoreFailure, StoreErrors::unavailable);
+    }
+
+    @Override
+    public Mono<Long> deleteByRecipient(String recipientId) {
+        return repository.deleteByRecipient(recipientId).onErrorMap(StoreErrors::isStoreFailure, StoreErrors::unavailable);
+    }
+
+    // Every type names its actor in actorId, a merged group its latest one: deleting by actor is exact.
+    @Override
+    public Mono<Set<String>> deleteByActor(String actorId) {
+        return repository.findRecipientsOfActor(actorId)
+                .map(NotificationRecipient::recipientId)
+                .collect(Collectors.toUnmodifiableSet())
+                .flatMap(recipients -> repository.deleteByActor(actorId).thenReturn(recipients))
+                .onErrorMap(StoreErrors::isStoreFailure, StoreErrors::unavailable);
+    }
+
+    @Override
+    public Mono<Void> deleteOwned(String recipientId, String id) {
+        return repository.deleteOwned(id, recipientId)
+                .then()
+                .onErrorMap(StoreErrors::isStoreFailure, StoreErrors::unavailable);
     }
 
     private Mono<Notification> store(Notification notification) {

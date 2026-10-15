@@ -24,16 +24,11 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Notifications against a real MongoDB: the atomic grouping and its partial unique index, paging, and
- * every read and write scoped to the recipient.
- *
- * <p>Opt-in, like the other integration tests: CI sets {@code CI=true}, locally pass
- * {@code -Dintegration.tests=true}.
- */
+/** Notifications against a real MongoDB: atomic grouping, paging, recipient scoping and erasure. */
 @Testcontainers
 @SpringBootTest(properties = "spring.data.mongodb.auto-index-creation=true")
 @ActiveProfiles("test")
@@ -70,6 +65,15 @@ class MongoNotificationRepositoryAdapterIntegrationTest {
     private static Notification friendRequest(String recipient, Instant at) {
         return Notification.draft(recipient, NotificationType.FRIEND_REQUEST, "Demande d'ami", "Léa", "/friends/lea",
                 null, "lea").withCreatedAt(at);
+    }
+
+    private static Notification messageFrom(String actor, String recipient, String conversation, Instant at) {
+        return Notification.draft(recipient, NotificationType.MESSAGE, actor, "Salut", "/chat/" + conversation,
+                conversation, actor).withCreatedAt(at);
+    }
+
+    private List<Notification> centerOf(String recipient) {
+        return adapter.findPage(recipient, null, 50).collectList().block();
     }
 
     @Test
@@ -163,6 +167,75 @@ class MongoNotificationRepositoryAdapterIntegrationTest {
         assertThat(adapter.markAllRead("bob", NOW).block()).isEqualTo(2L);
         assertThat(adapter.countUnread("bob").block()).isZero();
         assertThat(adapter.countUnread("carl").block()).isEqualTo(1L);
+    }
+
+    @Test
+    @DisplayName("clearing a center deletes every notification of that recipient, and only theirs")
+    void deleteByRecipient_shouldLeaveOtherRecipientsAlone() {
+        adapter.insert(friendRequest("lea", NOW)).block();
+        adapter.group(message("lea", "c1", "x", NOW)).block();
+        adapter.insert(friendRequest("bob", NOW)).block();
+
+        assertThat(adapter.deleteByRecipient("lea").block()).isEqualTo(2L);
+
+        assertThat(centerOf("lea")).isEmpty();
+        assertThat(centerOf("bob")).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("deleting by actor clears that actor from every center and names who lost a notification")
+    void deleteByActor_shouldDeleteInEveryCenterAndNameTheRecipients() {
+        adapter.insert(friendRequest("bob", NOW)).block();
+        adapter.group(messageFrom("lea", "carl", "c2", NOW)).block();
+        adapter.group(messageFrom("max", "carl", "c3", NOW)).block();
+
+        assertThat(adapter.deleteByActor("lea").block()).isEqualTo(Set.of("bob", "carl"));
+
+        assertThat(centerOf("bob")).isEmpty();
+        assertThat(centerOf("carl")).extracting(Notification::actorId).containsExactly("max");
+    }
+
+    @Test
+    @DisplayName("a merged group whose latest message is the actor's goes, the one someone else spoke last in stays")
+    void deleteByActor_shouldDeleteAMergedGroupWhoseLatestActorIsTheUser() {
+        adapter.group(messageFrom("max", "bob", "group", NOW.minusSeconds(60))).block();
+        adapter.group(messageFrom("lea", "bob", "group", NOW)).block();
+        adapter.group(messageFrom("lea", "carl", "group", NOW.minusSeconds(60))).block();
+        adapter.group(messageFrom("max", "carl", "group", NOW)).block();
+
+        assertThat(adapter.deleteByActor("lea").block()).isEqualTo(Set.of("bob"));
+
+        assertThat(centerOf("bob")).isEmpty();
+        assertThat(centerOf("carl")).singleElement().satisfies(left -> {
+            assertThat(left.actorId()).isEqualTo("max");
+            assertThat(left.count()).isEqualTo(2);
+        });
+    }
+
+    @Test
+    @DisplayName("removing a notification by id needs it to be the recipient's")
+    void deleteOwned_shouldNotDeleteAnotherRecipientsNotification() {
+        Notification bobs = adapter.insert(friendRequest("bob", NOW)).block();
+
+        adapter.deleteOwned("carl", bobs.id()).block();
+        assertThat(centerOf("bob")).hasSize(1);
+
+        adapter.deleteOwned("bob", bobs.id()).block();
+        assertThat(centerOf("bob")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("the actor index exists, so erasing an account is no collection scan")
+    void actorIndex_shouldExist() {
+        adapter.insert(friendRequest("bob", NOW)).block();
+
+        Document index = mongoTemplate.getCollection("notifications")
+                .flatMapMany(collection -> collection.listIndexes())
+                .filter(candidate -> "actor".equals(candidate.getString("name")))
+                .blockFirst(Duration.ofSeconds(10));
+
+        assertThat(index).isNotNull();
+        assertThat(index.get("key", Document.class)).containsKey("actorId");
     }
 
     @Test

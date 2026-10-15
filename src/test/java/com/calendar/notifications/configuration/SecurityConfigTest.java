@@ -1,7 +1,9 @@
 package com.calendar.notifications.configuration;
 
+import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.NotificationRepository;
 import com.calendar.notifications.domain.ports.PreferencesRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -33,6 +35,10 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
 @ActiveProfiles("test")
 class SecurityConfigTest {
 
+    private static final String P256DH =
+            "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4";
+    private static final String AUTH = "BTBZMqHH6r4Tts7J_aSIgg";
+
     @Autowired
     private ApplicationContext context;
 
@@ -48,6 +54,14 @@ class SecurityConfigTest {
 
     @MockitoBean
     private PreferencesRepository preferencesRepository;
+
+    @MockitoBean
+    private DeletedUserMarkers markers;
+
+    @BeforeEach
+    void noAccountIsDeleted() {
+        when(markers.anyDeleted(any())).thenReturn(Mono.just(false));
+    }
 
     private WebTestClient client() {
         return WebTestClient.bindToApplicationContext(context)
@@ -124,6 +138,35 @@ class SecurityConfigTest {
                 .exchange()
                 .expectStatus().isBadRequest()
                 .expectBody().jsonPath("$.code").isEqualTo("NTF-BUS-001");
+    }
+
+    @Test
+    @DisplayName("the stream of a deleted account answers 410 NTF-BUS-002 as problem+json, though the client accepts only SSE")
+    void apiHttpSecurity_shouldAnswer410OnTheStream_whenTheTokensUserIsErased() {
+        when(markers.anyDeleted(List.of("bob"))).thenReturn(Mono.just(true));
+
+        as("bob").get().uri("/notifications-service/notifications/stream")
+                .accept(MediaType.TEXT_EVENT_STREAM)
+                .exchange()
+                .expectStatus().isEqualTo(410)
+                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON)
+                .expectBody().jsonPath("$.code").isEqualTo("NTF-BUS-002");
+
+        verify(notificationRepository, never()).countUnread(any());
+    }
+
+    @Test
+    @DisplayName("a deleted account cannot register a device: 410 NTF-BUS-002")
+    void apiHttpSecurity_shouldAnswer410OnPushSubscribe_whenTheTokensUserIsErased() {
+        when(markers.anyDeleted(List.of("bob"))).thenReturn(Mono.just(true));
+
+        as("bob").put().uri("/notifications-service/push/subscriptions")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"endpoint\":\"https://push.example/1\",\"keys\":{\"p256dh\":\"" + P256DH
+                        + "\",\"auth\":\"" + AUTH + "\"}}")
+                .exchange()
+                .expectStatus().isEqualTo(410)
+                .expectBody().jsonPath("$.code").isEqualTo("NTF-BUS-002");
     }
 
     @Test

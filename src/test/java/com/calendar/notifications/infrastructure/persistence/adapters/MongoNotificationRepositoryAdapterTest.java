@@ -6,6 +6,7 @@ import com.calendar.notifications.exception.NotificationsErrorCode;
 import com.calendar.notifications.exception.NotificationsException;
 import com.calendar.notifications.infrastructure.persistence.entities.NotificationEntity;
 import com.calendar.notifications.infrastructure.persistence.mappers.NotificationPersistenceMapper;
+import com.calendar.notifications.infrastructure.persistence.projections.NotificationRecipient;
 import com.calendar.notifications.infrastructure.persistence.repositories.NotificationMongoRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -24,9 +25,11 @@ import reactor.test.StepVerifier;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -140,6 +143,47 @@ class MongoNotificationRepositoryAdapterTest {
     }
 
     @Test
+    @DisplayName("clearing a center goes through the recipient query")
+    void deleteByRecipient_shouldUseTheRecipientQuery() {
+        when(repository.deleteByRecipient("bob")).thenReturn(Mono.just(4L));
+
+        StepVerifier.create(adapter.deleteByRecipient("bob")).expectNext(4L).verifyComplete();
+    }
+
+    @Test
+    @DisplayName("deleting by actor first names who loses a notification, then deletes")
+    void deleteByActor_shouldNameTheRecipientsThenDelete() {
+        when(repository.findRecipientsOfActor("lea")).thenReturn(Flux.just(new NotificationRecipient("bob"),
+                new NotificationRecipient("bob"), new NotificationRecipient("carl")));
+        when(repository.deleteByActor("lea")).thenReturn(Mono.just(3L));
+
+        StepVerifier.create(adapter.deleteByActor("lea")).expectNext(Set.of("bob", "carl")).verifyComplete();
+
+        var order = inOrder(repository);
+        order.verify(repository).findRecipientsOfActor("lea");
+        order.verify(repository).deleteByActor("lea");
+    }
+
+    @Test
+    @DisplayName("an actor who caused nothing names nobody")
+    void deleteByActor_shouldReturnNoRecipient_whenTheActorHasNone() {
+        when(repository.findRecipientsOfActor("lea")).thenReturn(Flux.empty());
+        when(repository.deleteByActor("lea")).thenReturn(Mono.just(0L));
+
+        StepVerifier.create(adapter.deleteByActor("lea")).expectNext(Set.of()).verifyComplete();
+    }
+
+    @Test
+    @DisplayName("removing one notification goes through the recipient-scoped query")
+    void deleteOwned_shouldUseTheRecipientScopedQuery() {
+        when(repository.deleteOwned("n1", "bob")).thenReturn(Mono.just(1L));
+
+        StepVerifier.create(adapter.deleteOwned("bob", "n1")).verifyComplete();
+
+        verify(repository).deleteOwned("n1", "bob");
+    }
+
+    @Test
     @DisplayName("a MongoDB failure reaches the domain as NTF-TEC-001, on every method")
     void everyMethod_shouldTranslateStoreFailures() {
         when(repository.insert(any(NotificationEntity.class))).thenReturn(Mono.error(down()));
@@ -149,6 +193,9 @@ class MongoNotificationRepositoryAdapterTest {
         when(repository.markRead(any(), any(), any())).thenReturn(Mono.error(down()));
         when(repository.markGroupRead(any(), any(), any())).thenReturn(Mono.error(down()));
         when(repository.markAllRead(any(), any())).thenReturn(Mono.error(down()));
+        when(repository.deleteByRecipient(any())).thenReturn(Mono.error(down()));
+        when(repository.findRecipientsOfActor(any())).thenReturn(Flux.error(down()));
+        when(repository.deleteOwned(any(), any())).thenReturn(Mono.error(down()));
 
         assertStoreUnavailable(adapter.insert(message()));
         assertStoreUnavailable(adapter.group(message()));
@@ -157,6 +204,18 @@ class MongoNotificationRepositoryAdapterTest {
         assertStoreUnavailable(adapter.markRead("bob", List.of("n1"), NOW));
         assertStoreUnavailable(adapter.markGroupRead("bob", "c1", NOW));
         assertStoreUnavailable(adapter.markAllRead("bob", NOW));
+        assertStoreUnavailable(adapter.deleteByRecipient("bob"));
+        assertStoreUnavailable(adapter.deleteByActor("lea"));
+        assertStoreUnavailable(adapter.deleteOwned("bob", "n1"));
+    }
+
+    @Test
+    @DisplayName("a delete by actor that fails after naming the recipients is translated too")
+    void deleteByActor_shouldTranslateAFailedDelete() {
+        when(repository.findRecipientsOfActor("lea")).thenReturn(Flux.just(new NotificationRecipient("bob")));
+        when(repository.deleteByActor("lea")).thenReturn(Mono.error(down()));
+
+        assertStoreUnavailable(adapter.deleteByActor("lea"));
     }
 
     static void assertStoreUnavailable(Mono<?> call) {

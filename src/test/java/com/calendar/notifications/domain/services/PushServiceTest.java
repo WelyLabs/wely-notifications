@@ -7,6 +7,7 @@ import com.calendar.notifications.domain.models.NotificationType;
 import com.calendar.notifications.domain.models.PushMessage;
 import com.calendar.notifications.domain.models.PushResult;
 import com.calendar.notifications.domain.models.PushSubscription;
+import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.PreferencesRepository;
 import com.calendar.notifications.domain.ports.PushSender;
 import com.calendar.notifications.domain.ports.SubscriptionRepository;
@@ -16,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Flux;
@@ -25,11 +27,13 @@ import reactor.test.StepVerifier;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -49,12 +53,19 @@ class PushServiceTest {
     private PreferencesRepository preferences;
     @Mock
     private PushSender sender;
+    @Mock
+    private DeletedUserMarkers markers;
 
     private PushService service;
 
     @BeforeEach
     void setUp() {
-        service = new PushService(subscriptions, preferences, sender, Clock.fixed(NOW, ZoneOffset.UTC));
+        service = new PushService(subscriptions, preferences, sender, markers, Clock.fixed(NOW, ZoneOffset.UTC));
+    }
+
+    private static boolean accountDeleted(Throwable error) {
+        return error instanceof NotificationsException refused
+                && refused.getErrorCode() == NotificationsErrorCode.ACCOUNT_DELETED;
     }
 
     private static PushSubscription device(String endpoint) {
@@ -78,11 +89,55 @@ class PushServiceTest {
     @DisplayName("a device is saved for the caller, at the current time, whoever the request named")
     void subscribe_shouldSaveTheDeviceForTheCaller() {
         PushSubscription sent = new PushSubscription("mallory", "https://push.example/1", P256DH, AUTH, "Phone", null);
+        when(markers.anyDeleted(List.of("bob"))).thenReturn(Mono.just(false));
         when(subscriptions.save(any())).thenReturn(Mono.empty());
 
         StepVerifier.create(service.subscribe("bob", sent)).verifyComplete();
 
         verify(subscriptions).save(new PushSubscription("bob", "https://push.example/1", P256DH, AUTH, "Phone", NOW));
+        verify(subscriptions, never()).deleteOwned(any(), any());
+    }
+
+    @Test
+    @DisplayName("a deleted account cannot register a device: 410 NTF-BUS-002, nothing saved")
+    void subscribe_shouldRefuseAnErasedAccount_withoutSaving() {
+        when(markers.anyDeleted(List.of("bob"))).thenReturn(Mono.just(true));
+
+        StepVerifier.create(service.subscribe("bob", device("https://push.example/1")))
+                .expectErrorMatches(PushServiceTest::accountDeleted)
+                .verify();
+
+        verifyNoInteractions(subscriptions);
+    }
+
+    @Test
+    @DisplayName("an account deleted while its device was saved: the device is removed again, 410 NTF-BUS-002")
+    void subscribe_shouldRemoveTheSavedDevice_whenTheAccountIsDeletedMeanwhile() {
+        when(markers.anyDeleted(List.of("bob"))).thenReturn(Mono.just(false), Mono.just(true));
+        when(subscriptions.save(any())).thenReturn(Mono.empty());
+        when(subscriptions.deleteOwned("bob", "https://push.example/1")).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.subscribe("bob", device("https://push.example/1")))
+                .expectErrorMatches(PushServiceTest::accountDeleted)
+                .verify();
+
+        InOrder order = inOrder(subscriptions);
+        order.verify(subscriptions).save(any());
+        order.verify(subscriptions).deleteOwned("bob", "https://push.example/1");
+    }
+
+    @Test
+    @DisplayName("a device saved but not removed again reports the store failure")
+    void subscribe_shouldFail_whenTheSavedDeviceCannotBeRemoved() {
+        when(markers.anyDeleted(List.of("bob"))).thenReturn(Mono.just(false), Mono.just(true));
+        when(subscriptions.save(any())).thenReturn(Mono.empty());
+        when(subscriptions.deleteOwned("bob", "https://push.example/1"))
+                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+
+        StepVerifier.create(service.subscribe("bob", device("https://push.example/1")))
+                .expectErrorSatisfies(error -> assertThat(((NotificationsException) error).getErrorCode())
+                        .isEqualTo(NotificationsErrorCode.STORE_UNAVAILABLE))
+                .verify();
     }
 
     @Test
@@ -95,7 +150,7 @@ class PushServiceTest {
                         .isEqualTo(NotificationsErrorCode.SUBSCRIPTION_INVALID))
                 .verify();
 
-        verifyNoInteractions(subscriptions);
+        verifyNoInteractions(subscriptions, markers);
     }
 
     @Test
@@ -132,11 +187,43 @@ class PushServiceTest {
     void updatePreferences_shouldSaveForTheCaller() {
         Map<NotificationCategory, Boolean> push = Map.of(NotificationCategory.MESSAGES, false);
         NotificationPreferences expected = new NotificationPreferences("bob", push);
+        when(markers.anyDeleted(List.of("bob"))).thenReturn(Mono.just(false));
         when(preferences.save(expected)).thenReturn(Mono.just(expected));
 
         StepVerifier.create(service.updatePreferences("bob", new NotificationPreferences("mallory", push)))
                 .expectNext(expected)
                 .verifyComplete();
+
+        verify(preferences, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("an account deleted while its preferences were saved: they are deleted again, 410 NTF-BUS-002")
+    void updatePreferences_shouldDeleteTheSavedPreferences_whenTheAccountIsDeletedMeanwhile() {
+        NotificationPreferences saved = NotificationPreferences.defaults("bob");
+        when(markers.anyDeleted(List.of("bob"))).thenReturn(Mono.just(false), Mono.just(true));
+        when(preferences.save(saved)).thenReturn(Mono.just(saved));
+        when(preferences.delete("bob")).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.updatePreferences("bob", saved))
+                .expectErrorMatches(PushServiceTest::accountDeleted)
+                .verify();
+
+        InOrder order = inOrder(preferences);
+        order.verify(preferences).save(saved);
+        order.verify(preferences).delete("bob");
+    }
+
+    @Test
+    @DisplayName("a deleted account cannot save preferences again: 410 NTF-BUS-002, nothing saved")
+    void updatePreferences_shouldRefuseAnErasedAccount_withoutSaving() {
+        when(markers.anyDeleted(List.of("bob"))).thenReturn(Mono.just(true));
+
+        StepVerifier.create(service.updatePreferences("bob", NotificationPreferences.defaults("bob")))
+                .expectErrorMatches(PushServiceTest::accountDeleted)
+                .verify();
+
+        verifyNoInteractions(preferences);
     }
 
     @Test

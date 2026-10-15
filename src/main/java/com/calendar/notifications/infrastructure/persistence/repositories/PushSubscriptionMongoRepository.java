@@ -16,4 +16,7 @@ public interface PushSubscriptionMongoRepository extends ReactiveMongoRepository
     /** Filtered on the owner in the same query: nobody removes someone else's device. */
     @Query(value = "{ '_id': ?0, 'userId': ?1 }", delete = true)
     Mono<Long> deleteOwned(String endpoint, String userId);
+
+    @Query(value = "{ 'userId': ?0 }", delete = true)
+    Mono<Long> deleteByUser(String userId);
 }

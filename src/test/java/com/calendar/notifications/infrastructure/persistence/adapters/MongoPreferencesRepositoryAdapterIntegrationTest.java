@@ -21,7 +21,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Preferences against a real MongoDB. Opt-in: {@code CI=true} or {@code -Dintegration.tests=true}. */
+/** Preferences against a real MongoDB, opt-in with {@code CI=true} or {@code -Dintegration.tests=true}. */
 @Testcontainers
 @SpringBootTest
 @ActiveProfiles("test")
@@ -62,5 +62,25 @@ class MongoPreferencesRepositoryAdapterIntegrationTest {
         adapter.save(replaced).block();
 
         assertThat(adapter.find("bob").block()).isEqualTo(replaced);
+    }
+
+    @Test
+    @DisplayName("deleted preferences are gone, and someone else's stay")
+    void delete_shouldLeaveNothingToFind() {
+        adapter.save(new NotificationPreferences("bob", Map.of(NotificationCategory.CALLS, false))).block();
+        adapter.save(new NotificationPreferences("carl", Map.of(NotificationCategory.CALLS, false))).block();
+
+        adapter.delete("bob").block();
+
+        assertThat(adapter.find("bob").block()).isNull();
+        assertThat(adapter.find("carl").block()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("deleting preferences never saved is not an error")
+    void delete_shouldBeANoOp_whenNothingWasSaved() {
+        adapter.delete("bob").block();
+
+        assertThat(adapter.find("bob").block()).isNull();
     }
 }

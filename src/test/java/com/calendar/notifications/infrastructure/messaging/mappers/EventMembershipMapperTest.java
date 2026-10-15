@@ -24,11 +24,11 @@ class EventMembershipMapperTest {
     }
 
     @Test
-    @DisplayName("a deleted event has nobody left, at its version")
-    void toMembership_shouldEmptyADeletedEvent() {
+    @DisplayName("a deleted event has nobody left and no title, at its version")
+    void toMembership_shouldEmptyADeletedEventAndDropItsTitle() {
         EventGroupChangedDTO group = new EventGroupChangedDTO("e1", "Bowling", "olivia", List.of("olivia"), 4, true);
 
-        assertThat(mapper.toMembership(group)).isEqualTo(new EventMembership("e1", "Bowling", List.of(), 4));
+        assertThat(mapper.toMembership(group)).isEqualTo(new EventMembership("e1", null, List.of(), 4));
     }
 
     @Test

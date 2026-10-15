@@ -24,6 +24,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Signal;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -77,19 +78,20 @@ public class NotificationController {
         return notificationService.markRead(userId, request.ids());
     }
 
-    /**
-     * The unread count on connection, then {@code notification} and {@code unread} events. Comments keep
-     * the connection busy for proxies, and nginx is told not to buffer it.
-     */
+    /** The unread count, then {@code notification} and {@code unread} events; 410 for a deleted account. */
     @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public ResponseEntity<Flux<ServerSentEvent<Object>>> stream(@AuthenticationPrincipal Jwt jwt) {
-        Flux<ServerSentEvent<Object>> updates = notificationService.stream(jwt.getClaimAsString(BUSINESS_ID))
-                .map(this::toEvent);
-        Flux<ServerSentEvent<Object>> keepAlives = Flux.interval(keepAlive)
-                .map(tick -> ServerSentEvent.builder().comment(KEEP_ALIVE_COMMENT).build());
-        return ResponseEntity.ok()
-                .header("X-Accel-Buffering", "no")
-                .body(Flux.merge(updates, keepAlives));
+    public Mono<ResponseEntity<Flux<ServerSentEvent<Object>>>> stream(@AuthenticationPrincipal Jwt jwt) {
+        return notificationService.openStream(jwt.getClaimAsString(BUSINESS_ID))
+                .map(updates -> ResponseEntity.ok()
+                        .header("X-Accel-Buffering", "no")
+                        .body(withKeepAlives(updates.map(this::toEvent))));
+    }
+
+    // Merged as signals: the updates ending, or failing, ends the response; the endless ticks never hold it open.
+    private Flux<ServerSentEvent<Object>> withKeepAlives(Flux<ServerSentEvent<Object>> events) {
+        Flux<Signal<ServerSentEvent<Object>>> keepAlives = Flux.interval(keepAlive)
+                .map(tick -> Signal.next(ServerSentEvent.<Object>builder().comment(KEEP_ALIVE_COMMENT).build()));
+        return Flux.merge(events.materialize(), keepAlives).dematerialize();
     }
 
     private ServerSentEvent<Object> toEvent(LiveUpdate update) {

@@ -3,6 +3,7 @@ package com.calendar.notifications.domain.services;
 import com.calendar.notifications.domain.models.LiveUpdate;
 import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.models.NotificationType;
+import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.LiveNotifications;
 import com.calendar.notifications.domain.ports.NotificationRepository;
 import com.calendar.notifications.domain.ports.NotificationWording;
@@ -17,17 +18,23 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Collection;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -45,13 +52,23 @@ class NotificationServiceTest {
     private LiveNotifications live;
     @Mock
     private PushService pushService;
+    @Mock
+    private DeletedUserMarkers markers;
 
     private NotificationService service;
 
     @BeforeEach
     void setUp() {
         NotificationWording wording = notification -> notification.title() + "#" + notification.count();
-        service = new NotificationService(repository, live, pushService, wording, Clock.fixed(NOW, ZoneOffset.UTC));
+        service = new NotificationService(repository, live, pushService, wording, markers,
+                Clock.fixed(NOW, ZoneOffset.UTC));
+    }
+
+    /** The marker store as the service sees it: true when any id asked about is one of these. */
+    private void deleted(String... userIds) {
+        Set<String> gone = Set.of(userIds);
+        when(markers.anyDeleted(any())).thenAnswer(call -> Mono.just(
+                call.<Collection<String>>getArgument(0).stream().anyMatch(gone::contains)));
     }
 
     private static Notification friendRequest() {
@@ -66,6 +83,7 @@ class NotificationServiceTest {
     @Test
     @DisplayName("a notification is stored at the current time, sent live with the new count, then pushed")
     void notify_shouldStoreStreamAndPush() {
+        deleted();
         when(repository.insert(any())).thenAnswer(call -> Mono.just(call.<Notification>getArgument(0).withId("n1")));
         when(repository.countUnread("bob")).thenReturn(Mono.just(4L));
         when(pushService.deliver(any())).thenReturn(Mono.empty());
@@ -84,11 +102,13 @@ class NotificationServiceTest {
         assertThat(updates.getAllValues().get(1)).isEqualTo(new LiveUpdate.UnreadChanged(4));
         verify(pushService).deliver(any());
         verify(repository, never()).group(any());
+        verify(markers, times(2)).anyDeleted(List.of("bob", "lea"));
     }
 
     @Test
     @DisplayName("a message with a conversation is grouped, and comes out with the grouped title")
     void notify_shouldGroupAMessage() {
+        deleted();
         Notification merged = message().withId("n1").withCreatedAt(NOW);
         Notification grouped = new Notification("n1", "bob", NotificationType.MESSAGE, "Léa", "Salut", "/chat/c1",
                 "c1", 3, "lea", NOW, null);
@@ -106,6 +126,7 @@ class NotificationServiceTest {
     @Test
     @DisplayName("a store failure fails the notification, and nothing is streamed or pushed")
     void notify_shouldFailWithoutStreamingOrPushing_whenTheStoreFails() {
+        deleted();
         when(repository.insert(any()))
                 .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
 
@@ -114,6 +135,53 @@ class NotificationServiceTest {
                 .verify();
 
         verifyNoInteractions(live, pushService);
+    }
+
+    @Test
+    @DisplayName("a notification to a deleted account is dropped: nothing stored, streamed or pushed")
+    void notify_shouldDropTheDraftWithoutWriting_whenTheRecipientIsErased() {
+        deleted("bob");
+
+        StepVerifier.create(service.notify(friendRequest())).verifyComplete();
+
+        verifyNoInteractions(repository, live, pushService);
+    }
+
+    @Test
+    @DisplayName("a notification caused by a deleted account is dropped: nothing stored, streamed or pushed")
+    void notify_shouldDropTheDraftWithoutWriting_whenTheActorIsErased() {
+        deleted("lea");
+
+        StepVerifier.create(service.notify(message())).verifyComplete();
+
+        verifyNoInteractions(repository, live, pushService);
+    }
+
+    @Test
+    @DisplayName("an account erased while the notification was written: it is removed again, and only the count is streamed")
+    void notify_shouldRemoveTheSavedNotificationWithoutStreamingOrPushing_whenTheUserIsErasedMeanwhile() {
+        when(markers.anyDeleted(any())).thenReturn(Mono.just(false), Mono.just(true));
+        when(repository.insert(any())).thenAnswer(call -> Mono.just(call.<Notification>getArgument(0).withId("n1")));
+        when(repository.deleteOwned("bob", "n1")).thenReturn(Mono.empty());
+        when(repository.countUnread("bob")).thenReturn(Mono.just(2L));
+
+        StepVerifier.create(service.notify(friendRequest())).verifyComplete();
+
+        verify(repository).deleteOwned("bob", "n1");
+        verify(live).publish("bob", new LiveUpdate.UnreadChanged(2));
+        verify(live, never()).publish(eq("bob"), any(LiveUpdate.NotificationAdded.class));
+        verifyNoInteractions(pushService);
+    }
+
+    @Test
+    @DisplayName("markers that cannot be read fail the notification before anything is written")
+    void notify_shouldFail_whenTheMarkersCannotBeRead() {
+        when(markers.anyDeleted(any()))
+                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+
+        StepVerifier.create(service.notify(friendRequest())).expectError(NotificationsException.class).verify();
+
+        verifyNoInteractions(repository, live, pushService);
     }
 
     @Test
@@ -196,14 +264,59 @@ class NotificationServiceTest {
 
     @Test
     @DisplayName("the stream opens with the unread count, then carries the live updates")
-    void stream_shouldStartWithTheCountThenLiveUpdates() {
+    void openStream_shouldStartWithTheCountThenLiveUpdates() {
+        deleted();
         LiveUpdate added = new LiveUpdate.NotificationAdded(friendRequest().withId("n1"));
         when(repository.countUnread("bob")).thenReturn(Mono.just(3L));
         when(live.stream("bob")).thenReturn(Flux.just(added));
 
-        StepVerifier.create(service.stream("bob"))
+        StepVerifier.create(service.openStream("bob").flatMapMany(updates -> updates))
                 .expectNext(new LiveUpdate.UnreadChanged(3))
                 .expectNext(added)
                 .verifyComplete();
+
+        verify(live, never()).close(any());
+    }
+
+    @Test
+    @DisplayName("an account deleted just before the join: the marker is read again once joined, the channel closed")
+    void openStream_shouldCloseTheChannel_whenTheAccountIsDeletedBeforeTheJoin() {
+        Sinks.Many<LiveUpdate> channel = Sinks.many().multicast().onBackpressureBuffer();
+        AtomicBoolean joined = new AtomicBoolean();
+        when(live.stream("bob")).thenReturn(channel.asFlux().doOnSubscribe(subscription -> joined.set(true)));
+        // Not deleted at the first check, deleted by the time the channel is joined.
+        when(markers.anyDeleted(List.of("bob"))).thenAnswer(call -> Mono.just(joined.get()));
+        doAnswer(call -> channel.tryEmitComplete()).when(live).close("bob");
+        when(repository.countUnread("bob")).thenReturn(Mono.just(3L));
+
+        StepVerifier.create(service.openStream("bob").flatMapMany(updates -> updates))
+                .expectNext(new LiveUpdate.UnreadChanged(3))
+                .expectComplete()
+                .verify(Duration.ofSeconds(5));
+
+        verify(live).close("bob");
+    }
+
+    @Test
+    @DisplayName("a deleted account's stream is refused with NTF-BUS-002, without joining its channel")
+    void openStream_shouldRefuseAnErasedAccount_withoutJoiningTheChannel() {
+        deleted("bob");
+
+        StepVerifier.create(service.openStream("bob"))
+                .expectErrorSatisfies(error -> assertThat(((NotificationsException) error).getErrorCode())
+                        .isEqualTo(NotificationsErrorCode.ACCOUNT_DELETED))
+                .verify();
+
+        verifyNoInteractions(live, repository);
+    }
+
+    @Test
+    @DisplayName("announcing the unread count publishes the recipient's current count")
+    void announceUnreadCount_shouldPublishTheRecipientsCount() {
+        when(repository.countUnread("bob")).thenReturn(Mono.just(6L));
+
+        StepVerifier.create(service.announceUnreadCount("bob")).verifyComplete();
+
+        verify(live).publish("bob", new LiveUpdate.UnreadChanged(6));
     }
 }

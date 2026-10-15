@@ -8,7 +8,8 @@ import org.mapstruct.Mapping;
 @Mapper(componentModel = "spring")
 public interface EventMembershipMapper {
 
-    /** A deleted event keeps its version with nobody in it, so an older record cannot bring it back. */
+    /** A deleted event keeps its version but no member and no title, so an older record cannot revive it. */
     @Mapping(target = "memberIds", expression = "java(Boolean.TRUE.equals(group.deleted()) ? java.util.List.of() : group.memberIds())")
+    @Mapping(target = "title", expression = "java(Boolean.TRUE.equals(group.deleted()) ? null : group.title())")
     EventMembership toMembership(EventGroupChangedDTO group);
 }

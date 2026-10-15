@@ -3,7 +3,9 @@ package com.calendar.notifications.exception;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.bind.support.WebExchangeBindException;
@@ -15,11 +17,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/**
- * Turns every failure into an RFC 7807 {@code application/problem+json} response, in the same shape as
- * the other services: {@code code} is the stable identifier a client branches on, {@code timestamp}
- * ties the response to the logs.
- */
+/** Turns every failure into an RFC 7807 problem response, with the stable {@code code} a client branches on. */
 @RestControllerAdvice
 public class GlobalErrorHandler {
 
@@ -28,15 +26,18 @@ public class GlobalErrorHandler {
     /** Namespace for the {@code type} URI. Not dereferenced; it identifies, it does not serve. */
     private static final String PROBLEM_TYPE_BASE = "https://welylabs.app/problems/";
 
+    /** Sets problem+json itself, so the SSE route does not write the problem as an event. */
     @ExceptionHandler(NotificationsException.class)
-    public ProblemDetail handleNotificationsException(NotificationsException ex, ServerWebExchange exchange) {
+    public ResponseEntity<ProblemDetail> handleNotificationsException(NotificationsException ex,
+                                                                      ServerWebExchange exchange) {
         NotificationsErrorCode error = ex.getErrorCode();
 
         // Expected outcome, not an incident: logged at WARN, and without a stack trace.
         log.warn("Business failure {} on {}", error.getCode(), exchange.getRequest().getPath());
 
-        return problem(error.getHttpStatus(), error.getCode(), error.getTitle(), error.getDetail(),
-                exchange);
+        return ResponseEntity.status(error.getHttpStatus())
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(problem(error.getHttpStatus(), error.getCode(), error.getTitle(), error.getDetail(), exchange));
     }
 
     /** Bean Validation rejections, with the offending fields listed. */

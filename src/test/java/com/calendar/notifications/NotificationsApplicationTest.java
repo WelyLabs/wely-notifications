@@ -3,7 +3,9 @@ package com.calendar.notifications;
 import com.calendar.notifications.domain.ports.PushSender;
 import com.calendar.notifications.domain.services.NotificationService;
 import com.calendar.notifications.domain.services.PushService;
+import com.calendar.notifications.domain.services.AccountErasureService;
 import com.calendar.notifications.infrastructure.messaging.adapters.CallEventsConsumer;
+import com.calendar.notifications.infrastructure.messaging.adapters.UserDeletedConsumer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,6 +27,7 @@ class NotificationsApplicationTest {
     void contextLoads_withTheDomainServices() {
         assertThat(context.getBean(NotificationService.class)).isNotNull();
         assertThat(context.getBean(PushService.class)).isNotNull();
+        assertThat(context.getBean(AccountErasureService.class)).isNotNull();
     }
 
     @Test
@@ -38,5 +41,6 @@ class NotificationsApplicationTest {
     @DisplayName("the consumers stay off when disabled")
     void contextLoads_withoutConsumers_whenDisabled() {
         assertThat(context.getBeansOfType(CallEventsConsumer.class)).isEmpty();
+        assertThat(context.getBeansOfType(UserDeletedConsumer.class)).isEmpty();
     }
 }

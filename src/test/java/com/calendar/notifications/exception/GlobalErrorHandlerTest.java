@@ -29,6 +29,16 @@ class GlobalErrorHandlerTest {
             return Mono.error(new NotificationsException(NotificationsErrorCode.SUBSCRIPTION_INVALID));
         }
 
+        @GetMapping("/account-deleted")
+        Mono<Void> accountDeleted() {
+            return Mono.error(new NotificationsException(NotificationsErrorCode.ACCOUNT_DELETED));
+        }
+
+        @GetMapping(value = "/event-stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+        Mono<Void> eventStreamRefused() {
+            return Mono.error(new NotificationsException(NotificationsErrorCode.ACCOUNT_DELETED));
+        }
+
         @GetMapping("/store-down")
         Mono<Void> storeDown() {
             return Mono.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE,
@@ -87,6 +97,30 @@ class GlobalErrorHandlerTest {
                 .expectStatus().isEqualTo(502)
                 .expectBody()
                 .jsonPath("$.code").isEqualTo("NTF-TEC-001");
+    }
+
+    @Test
+    @DisplayName("a deleted account answers 410 Gone with NTF-BUS-002")
+    void handleNotificationsException_shouldAnswer410_forAnErasedAccount() {
+        client.get().uri("/account-deleted")
+                .exchange()
+                .expectStatus().isEqualTo(410)
+                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON)
+                .expectBody()
+                .jsonPath("$.code").isEqualTo("NTF-BUS-002")
+                .jsonPath("$.title").isEqualTo("Account deleted");
+    }
+
+    @Test
+    @DisplayName("a business failure on an SSE route still answers problem+json, not an event")
+    void handleNotificationsException_shouldAnswerProblemJson_onAnEventStreamRoute() {
+        client.get().uri("/event-stream")
+                .accept(MediaType.TEXT_EVENT_STREAM)
+                .exchange()
+                .expectStatus().isEqualTo(410)
+                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON)
+                .expectBody()
+                .jsonPath("$.code").isEqualTo("NTF-BUS-002");
     }
 
     @Test

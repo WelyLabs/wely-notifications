@@ -1,6 +1,7 @@
 package com.calendar.notifications.infrastructure.persistence.repositories;
 
 import com.calendar.notifications.infrastructure.persistence.entities.NotificationEntity;
+import com.calendar.notifications.infrastructure.persistence.projections.NotificationRecipient;
 import org.springframework.data.domain.Limit;
 import org.springframework.data.mongodb.repository.Query;
 import org.springframework.data.mongodb.repository.ReactiveMongoRepository;
@@ -47,4 +48,18 @@ public interface NotificationMongoRepository extends ReactiveMongoRepository<Not
     @Query("{ 'recipientId': ?0, 'readAt': null }")
     @Update("{ '$set': { 'readAt': ?1 }, '$unset': { 'openGroupKey': '' } }")
     Mono<Long> markAllRead(String recipientId, Instant at);
+
+    @Query(value = "{ 'recipientId': ?0 }", delete = true)
+    Mono<Long> deleteByRecipient(String recipientId);
+
+    /** Only the recipient is read back: who to tell their unread count changed. */
+    @Query(value = "{ 'actorId': ?0 }", fields = "{ 'recipientId': 1 }")
+    Flux<NotificationRecipient> findRecipientsOfActor(String actorId);
+
+    @Query(value = "{ 'actorId': ?0 }", delete = true)
+    Mono<Long> deleteByActor(String actorId);
+
+    /** Filtered on the recipient in the same query: nobody removes someone else's notification. */
+    @Query(value = "{ '_id': ?0, 'recipientId': ?1 }", delete = true)
+    Mono<Long> deleteOwned(String id, String recipientId);
 }

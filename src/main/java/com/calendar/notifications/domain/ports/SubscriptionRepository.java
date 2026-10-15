@@ -17,4 +17,7 @@ public interface SubscriptionRepository {
 
     /** Removes the endpoint whoever holds it: the push service said it no longer exists. */
     Mono<Void> delete(String endpoint);
+
+    /** Removes every device of the user. */
+    Mono<Void> deleteByUser(String userId);
 }

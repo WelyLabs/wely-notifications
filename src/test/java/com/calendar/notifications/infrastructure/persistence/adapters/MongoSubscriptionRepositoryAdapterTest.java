@@ -79,6 +79,16 @@ class MongoSubscriptionRepositoryAdapterTest {
     }
 
     @Test
+    @DisplayName("every device of a user goes through the user query")
+    void deleteByUser_shouldUseTheUserQuery() {
+        when(repository.deleteByUser("bob")).thenReturn(Mono.just(2L));
+
+        StepVerifier.create(adapter.deleteByUser("bob")).verifyComplete();
+
+        verify(repository).deleteByUser("bob");
+    }
+
+    @Test
     @DisplayName("a MongoDB failure reaches the domain as NTF-TEC-001")
     void everyMethod_shouldTranslateStoreFailures() {
         DataAccessResourceFailureException down = new DataAccessResourceFailureException("down");
@@ -86,10 +96,12 @@ class MongoSubscriptionRepositoryAdapterTest {
         when(repository.findByUser(any())).thenReturn(Flux.error(down));
         when(repository.deleteOwned(any(), any())).thenReturn(Mono.error(down));
         when(repository.deleteById(any(String.class))).thenReturn(Mono.error(down));
+        when(repository.deleteByUser(any())).thenReturn(Mono.error(down));
 
         assertStoreUnavailable(adapter.save(DEVICE));
         assertStoreUnavailable(adapter.findByUser("bob").then());
         assertStoreUnavailable(adapter.deleteOwned("bob", "https://push/1"));
         assertStoreUnavailable(adapter.delete("https://push/1"));
+        assertStoreUnavailable(adapter.deleteByUser("bob"));
     }
 }

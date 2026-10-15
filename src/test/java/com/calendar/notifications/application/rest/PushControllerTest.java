@@ -5,6 +5,8 @@ import com.calendar.notifications.application.dtos.PushSubscriptionRequest;
 import com.calendar.notifications.application.mappers.PushRestMapper;
 import com.calendar.notifications.domain.models.PushSubscription;
 import com.calendar.notifications.domain.services.PushService;
+import com.calendar.notifications.exception.NotificationsErrorCode;
+import com.calendar.notifications.exception.NotificationsException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -17,6 +19,8 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -54,6 +58,20 @@ class PushControllerTest {
                 new PushSubscriptionRequest.Keys("p", "a"), null))).verifyComplete();
 
         verify(pushService).subscribe("bob", expected);
+    }
+
+    @Test
+    @DisplayName("a deleted account's refusal reaches the advice unchanged")
+    void subscribe_shouldPropagateTheRefusal_whenTheAccountIsErased() {
+        when(jwt.getClaimAsString("businessId")).thenReturn("bob");
+        when(pushService.subscribe(eq("bob"), any()))
+                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.ACCOUNT_DELETED)));
+
+        StepVerifier.create(controller.subscribe(jwt, new PushSubscriptionRequest("https://push/1",
+                        new PushSubscriptionRequest.Keys("p", "a"), null)))
+                .expectErrorSatisfies(error -> assertThat(((NotificationsException) error).getErrorCode())
+                        .isEqualTo(NotificationsErrorCode.ACCOUNT_DELETED))
+                .verify();
     }
 
     @Test
