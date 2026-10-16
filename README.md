@@ -229,6 +229,8 @@ When `wely-users` deletes an account, it publishes `USER_DELETED`. This service 
 
 A failure is retried five times with a growing delay (1 s, up to 30 s), then logged; the stream moves on to the next record. Replaying a record redoes deletions that no longer match anything.
 
+**Reconciliation.** Kafka is the fast path, not the guarantee. `DeletedUsersReconciliationLoop` pages wely-users' tombstones (`GET /user-service/internal/deleted-users`, reached on the wely-users Service with `X-Internal-Secret: DELETED_USERS_READER_SECRET`, 500 per page) one minute after startup, then every 24 h. It runs the same erasure for every tombstone whose marker is missing or has no `erasedAt`, and again for every account deleted less than 48 h ago, which sweeps what a token still valid after the deletion may have written. A pass that fails, or that counts a failed erasure, is retried after 1 h; a pass still running after 24 h (a hung query) is cut and retried 1 h later. Each pass logs one summary line (tombstones, erased, failed). This repairs a record lost by a pod stopping mid-way, a record skipped after its retries, a new consumer group and a restored database; erasure never depends on how long Kafka keeps `USER_DELETED`.
+
 **Guards.** The marker is permanent; it holds only the `businessId`, which the other services already keep as a pseudonym.
 
 - `notify` creates nothing for a deleted recipient or actor: a message, a call or a friend request arriving late on Kafka recreates nothing.
@@ -256,6 +258,7 @@ A failure is retried five times with a growing delay (1 s, up to 30 s), then log
 | `NTF-BUS-001` | 400 | Abonnement push inutilisable : endpoint non `https`, `p256dh` qui n'est pas un point P-256, `auth` qui ne fait pas 16 octets |
 | `NTF-BUS-002` | 410 | Account deleted: push subscription, preferences or stream refused |
 | `NTF-TEC-001` | 502 | MongoDB injoignable |
+| `NTF-TEC-002` | 502 | wely-users' list of deleted accounts unreadable or not configured (reconciliation only, never sent to a client) |
 | `NTF-VAL-001` | 400 | Validation du corps JSON, détail par champ |
 | `NTF-REQ-000` | *repris* | Chemin inconnu, méthode non autorisée, paramètre manquant |
 | `NTF-TEC-000` | 500 | Erreur inattendue |
@@ -292,6 +295,9 @@ Toutes les réponses d'erreur sont des `ProblemDetail` (RFC 7807), avec `code` e
 | `USER_DELETED_TOPIC` | `USER_DELETED` | Deleted accounts, from `wely-users` |
 | `NOTICES_ZONE` | `Europe/Paris` | Fuseau des dates écrites dans les notifications |
 | `NOTIFICATIONS_CONSUMERS_ENABLED` | `true` | Turns off the six Kafka consumers |
+| `USERS_API_URL` | empty (`http://localhost:8082` in `dev`) | wely-users' in-cluster URL, read by the reconciliation. Empty: the service starts, each pass fails with `NTF-TEC-002` |
+| `DELETED_USERS_READER_SECRET` | empty | Reader secret of wely-users' deleted-accounts list, sent in `X-Internal-Secret`. Empty: same effect as above |
+| `ACCOUNT_ERASURE_RECONCILIATION_ENABLED` | `true` | `false` stops the reconciliation loop |
 
 **Sans clés VAPID, le push est désactivé** — un avertissement au démarrage, `GET /push/public-key` rend une chaîne vide — mais le centre de notifications et le flux SSE fonctionnent. Une paire de clés malformée désactive aussi le push au lieu d'empêcher le démarrage.
 
@@ -341,6 +347,6 @@ They also cover the deleted-account markers, deletions by actor, a late friend r
 - **Closing a deleted account's streams is per pod.** Only the streams open on the pod that reads `USER_DELETED` are closed; with several replicas, a stream open on another pod would stay open.
 - **Pas de nom pour l'appelant.** Les événements d'appel ne portent que des identifiants et ce service ne tient pas d'annuaire : la notification dit « Appel vidéo — On t'appelle sur Wely », sans dire qui. Les messages et les demandes d'ami, eux, portent le nom de l'émetteur.
 - **Au plus une fois, sans outbox côté producteurs.** Un enregistrement en échec est abandonné après journalisation (avec trois nouvelles tentatives pour la projection des membres). Une notification manquée n'est pas rejouée.
-- **No erasure catch-up yet.** A `USER_DELETED` still failing after five attempts, or lost to a pod stopping mid-way, leaves a marker without `erasedAt` (or no marker at all): nothing replays it automatically yet.
+- **Erasure catch-up is daily.** A `USER_DELETED` still failing after five attempts, or lost to a pod stopping mid-way, leaves a marker without `erasedAt` (or no marker at all) until the next reconciliation pass: at most 24 h, plus 1 h per failed pass.
 - **Pas de purge.** Les notifications lues restent en base ; un index TTL sur `readAt` serait la prochaine étape.
 - **Un seul fuseau horaire** pour les dates écrites, comme les notices de `wely-chat`.

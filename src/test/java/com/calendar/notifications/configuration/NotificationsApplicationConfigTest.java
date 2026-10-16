@@ -1,6 +1,7 @@
 package com.calendar.notifications.configuration;
 
 import com.calendar.notifications.domain.ports.DeletedUserMarkers;
+import com.calendar.notifications.domain.ports.DeletedUsersSource;
 import com.calendar.notifications.domain.ports.EventMembers;
 import com.calendar.notifications.domain.ports.LiveNotifications;
 import com.calendar.notifications.domain.ports.NotificationRepository;
@@ -8,12 +9,14 @@ import com.calendar.notifications.domain.ports.NotificationWording;
 import com.calendar.notifications.domain.ports.PreferencesRepository;
 import com.calendar.notifications.domain.ports.PushSender;
 import com.calendar.notifications.domain.ports.SubscriptionRepository;
+import com.calendar.notifications.domain.services.AccountErasureService;
 import com.calendar.notifications.domain.services.NotificationService;
 import com.calendar.notifications.domain.services.PushService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.ZoneOffset;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -49,8 +52,13 @@ class NotificationsApplicationConfigTest {
         assertThat(pushService).isNotNull();
         assertThat(notificationService).isNotNull();
         assertThat(config.eventMembershipService(eventMembers)).isNotNull();
-        assertThat(config.accountErasureService(markers, repository, subscriptions, preferences, live,
-                notificationService, clock)).isNotNull();
-        verifyNoInteractions(subscriptions, preferences, sender, repository, live, eventMembers, markers);
+        AccountErasureService erasure = config.accountErasureService(markers, repository, subscriptions, preferences,
+                live, notificationService, clock);
+        DeletedUsersSource source = mock(DeletedUsersSource.class);
+
+        assertThat(erasure).isNotNull();
+        assertThat(config.accountReconciliationService(source, markers, erasure, clock, Duration.ofHours(48), 500))
+                .isNotNull();
+        verifyNoInteractions(subscriptions, preferences, sender, repository, live, eventMembers, markers, source);
     }
 }

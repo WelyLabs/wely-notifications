@@ -19,6 +19,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -83,5 +84,18 @@ class MongoDeletedUserMarkersAdapterIntegrationTest {
         assertThat(adapter.anyDeleted(Arrays.asList("lea", null)).block()).isTrue();
         assertThat(adapter.anyDeleted(List.of("bob", "carl")).block()).isFalse();
         assertThat(adapter.anyDeleted(List.of()).block()).isFalse();
+    }
+
+    @Test
+    @DisplayName("only markers whose erasure ran are listed: none, or one still owed, means reconciliation erases")
+    void erasedAmong_shouldReturnOnlyIdsWithErasedAt() {
+        adapter.markDeleted("lea", DELETED_AT).block();
+        adapter.markErased("lea", DELETED_AT.plusSeconds(2)).block();
+        adapter.markDeleted("carl", DELETED_AT).block();
+        adapter.markDeleted("dina", DELETED_AT).block();
+        adapter.markErased("dina", DELETED_AT.plusSeconds(2)).block();
+
+        assertThat(adapter.erasedAmong(List.of("lea", "bob", "carl")).block()).isEqualTo(Set.of("lea"));
+        assertThat(adapter.erasedAmong(List.of()).block()).isEmpty();
     }
 }

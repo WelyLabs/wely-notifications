@@ -12,12 +12,14 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.DuplicateKeyException;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 
 import static com.calendar.notifications.infrastructure.persistence.adapters.MongoNotificationRepositoryAdapterTest.assertStoreUnavailable;
 import static org.mockito.ArgumentMatchers.any;
@@ -103,9 +105,27 @@ class MongoDeletedUserMarkersAdapterTest {
         when(repository.insert(any(DeletedUserEntity.class))).thenReturn(Mono.error(down));
         when(repository.markErased(any(), any())).thenReturn(Mono.error(down));
         when(repository.existsAnyByIdIn(any())).thenReturn(Mono.error(down));
+        when(repository.findErasedIdsIn(any())).thenReturn(Flux.error(down));
 
         assertStoreUnavailable(adapter.markDeleted("lea", DELETED_AT));
         assertStoreUnavailable(adapter.markErased("lea", DELETED_AT));
         assertStoreUnavailable(adapter.anyDeleted(List.of("lea")));
+        assertStoreUnavailable(adapter.erasedAmong(List.of("lea")));
+    }
+
+    @Test
+    @DisplayName("the ids whose erasure ran are read from their markers")
+    void erasedAmong_shouldReturnTheIdsWhoseErasureRan() {
+        when(repository.findErasedIdsIn(List.of("bob", "lea"))).thenReturn(Flux.just(new DeletedUserEntity("lea", null, null)));
+
+        StepVerifier.create(adapter.erasedAmong(List.of("bob", "lea"))).expectNext(Set.of("lea")).verifyComplete();
+    }
+
+    @Test
+    @DisplayName("no id at all needs no query")
+    void erasedAmong_shouldNotQuery_whenNoIdIsGiven() {
+        StepVerifier.create(adapter.erasedAmong(List.of())).expectNext(Set.of()).verifyComplete();
+
+        verifyNoInteractions(repository);
     }
 }

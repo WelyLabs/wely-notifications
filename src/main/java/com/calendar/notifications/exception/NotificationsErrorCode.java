@@ -21,6 +21,13 @@ public enum NotificationsErrorCode {
             "NTF-TEC-001",
             "Notification store unavailable",
             "The notifications could not be read or written; try again shortly.",
+            HttpStatus.BAD_GATEWAY),
+
+    /** wely-users' list of deleted accounts could not be read; only the reconciliation loop reads it. */
+    USERS_UNAVAILABLE(
+            "NTF-TEC-002",
+            "User directory unavailable",
+            "The deleted accounts could not be listed from wely-users; try again shortly.",
             HttpStatus.BAD_GATEWAY);
 
     private final String code;
