@@ -2,6 +2,7 @@ package com.calendar.notifications.infrastructure.persistence.adapters;
 
 import com.calendar.notifications.domain.models.DeletedUserMarker;
 import com.calendar.notifications.domain.ports.DeletedUserMarkers;
+import com.calendar.notifications.infrastructure.persistence.entities.DeletedUserEntity;
 import com.calendar.notifications.infrastructure.persistence.mappers.DeletedUserPersistenceMapper;
 import com.calendar.notifications.infrastructure.persistence.repositories.DeletedUserMongoRepository;
 import org.springframework.dao.DuplicateKeyException;
@@ -12,6 +13,8 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /** The deleted_users markers in MongoDB; inserting twice keeps the first deletion time. */
 @Component
@@ -47,5 +50,16 @@ public class MongoDeletedUserMarkersAdapter implements DeletedUserMarkers {
             return Mono.just(false);
         }
         return repository.existsAnyByIdIn(ids).onErrorMap(StoreErrors::isStoreFailure, StoreErrors::unavailable);
+    }
+
+    @Override
+    public Mono<Set<String>> erasedAmong(Collection<String> userIds) {
+        if (userIds.isEmpty()) {
+            return Mono.just(Set.of());
+        }
+        return repository.findErasedIdsIn(userIds)
+                .map(DeletedUserEntity::userId)
+                .collect(Collectors.toUnmodifiableSet())
+                .onErrorMap(StoreErrors::isStoreFailure, StoreErrors::unavailable);
     }
 }

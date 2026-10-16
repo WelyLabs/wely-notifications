@@ -4,6 +4,7 @@ import reactor.core.publisher.Mono;
 
 import java.time.Instant;
 import java.util.Collection;
+import java.util.Set;
 
 /** Permanent markers of deleted accounts, so a late record or a valid token cannot recreate their data. */
 public interface DeletedUserMarkers {
@@ -16,4 +17,7 @@ public interface DeletedUserMarkers {
 
     /** True when any of the ids is deleted; null ids are ignored, and no id at all is false. */
     Mono<Boolean> anyDeleted(Collection<String> userIds);
+
+    /** The ids among these whose marker has an erasedAt; no query for an empty input. */
+    Mono<Set<String>> erasedAmong(Collection<String> userIds);
 }

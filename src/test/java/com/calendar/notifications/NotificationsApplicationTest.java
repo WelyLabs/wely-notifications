@@ -4,8 +4,10 @@ import com.calendar.notifications.domain.ports.PushSender;
 import com.calendar.notifications.domain.services.NotificationService;
 import com.calendar.notifications.domain.services.PushService;
 import com.calendar.notifications.domain.services.AccountErasureService;
+import com.calendar.notifications.domain.services.AccountReconciliationService;
 import com.calendar.notifications.infrastructure.messaging.adapters.CallEventsConsumer;
 import com.calendar.notifications.infrastructure.messaging.adapters.UserDeletedConsumer;
+import com.calendar.notifications.infrastructure.reconciliation.DeletedUsersReconciliationLoop;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,5 +44,13 @@ class NotificationsApplicationTest {
     void contextLoads_withoutConsumers_whenDisabled() {
         assertThat(context.getBeansOfType(CallEventsConsumer.class)).isEmpty();
         assertThat(context.getBeansOfType(UserDeletedConsumer.class)).isEmpty();
+    }
+
+    /** The loop would call wely-users a minute after startup; the test profile switches it off. */
+    @Test
+    @DisplayName("the reconciliation loop stays off when disabled")
+    void contextLoads_withoutReconciliationLoop_whenDisabled() {
+        assertThat(context.getBeansOfType(DeletedUsersReconciliationLoop.class)).isEmpty();
+        assertThat(context.getBean(AccountReconciliationService.class)).isNotNull();
     }
 }
