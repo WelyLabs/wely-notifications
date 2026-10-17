@@ -2,6 +2,9 @@ package com.calendar.notifications.domain.services;
 
 import com.calendar.notifications.domain.models.ApnsDevice;
 import com.calendar.notifications.domain.models.ApnsEnvironment;
+import com.calendar.notifications.domain.models.ApnsPushKind;
+import com.calendar.notifications.domain.models.CallMedia;
+import com.calendar.notifications.domain.models.IncomingCall;
 import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.models.NotificationCategory;
 import com.calendar.notifications.domain.models.NotificationPreferences;
@@ -9,6 +12,7 @@ import com.calendar.notifications.domain.models.NotificationType;
 import com.calendar.notifications.domain.models.PushMessage;
 import com.calendar.notifications.domain.models.PushResult;
 import com.calendar.notifications.domain.models.PushSubscription;
+import com.calendar.notifications.domain.models.VoipPush;
 import com.calendar.notifications.domain.ports.ApnsDeviceRepository;
 import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.NativePushSender;
@@ -83,7 +87,24 @@ class PushServiceTest {
     }
 
     private static ApnsDevice iphone(String token) {
-        return new ApnsDevice("bob", token, ApnsEnvironment.PRODUCTION, NOW);
+        return new ApnsDevice("bob", token, ApnsEnvironment.PRODUCTION, ApnsPushKind.ALERT, NOW);
+    }
+
+    private static ApnsDevice pushKit(String token) {
+        return new ApnsDevice("bob", token, ApnsEnvironment.PRODUCTION, ApnsPushKind.VOIP, NOW);
+    }
+
+    private static final String VOIP_TOKEN = "f".repeat(64);
+    private static final IncomingCall CALL = new IncomingCall("k1", "lea", CallMedia.VIDEO, "conv1");
+
+    private static Notification ringing() {
+        return new Notification("n1", "bob", NotificationType.CALL_INCOMING, "Appel vidéo", "On t'appelle sur Wely",
+                "/call/k1", "k1", 1, "lea", NOW, null);
+    }
+
+    private static Notification missed() {
+        return new Notification("n2", "bob", NotificationType.CALL_MISSED, "Appel vidéo manqué",
+                "Tu as manqué un appel", "/chat/conv1", "k1", 1, "lea", NOW, null);
     }
 
     private static Notification message() {
@@ -323,9 +344,9 @@ class PushServiceTest {
         when(apnsDevices.save(any())).thenReturn(Mono.empty());
 
         StepVerifier.create(service.registerDevice("bob",
-                new ApnsDevice("mallory", TOKEN.toUpperCase(), ApnsEnvironment.SANDBOX, null))).verifyComplete();
+                new ApnsDevice("mallory", TOKEN.toUpperCase(), ApnsEnvironment.SANDBOX, ApnsPushKind.ALERT, null))).verifyComplete();
 
-        verify(apnsDevices).save(new ApnsDevice("bob", TOKEN, ApnsEnvironment.SANDBOX, NOW));
+        verify(apnsDevices).save(new ApnsDevice("bob", TOKEN, ApnsEnvironment.SANDBOX, ApnsPushKind.ALERT, NOW));
         verify(apnsDevices, never()).deleteOwned(any(), any());
     }
 
@@ -497,5 +518,158 @@ class PushServiceTest {
         StepVerifier.create(service.deliver(message())).verifyComplete();
 
         verify(nativeSender).send(eq(iphone(other)), any());
+    }
+
+    @Test
+    @DisplayName("a ringing call rings the PushKit devices, and the alert devices get nothing")
+    void deliverCall_shouldRingVoipDevicesOnly_whenTheUserHasOne() {
+        when(nativeSender.enabled()).thenReturn(true);
+        when(preferences.find("bob")).thenReturn(Mono.empty());
+        when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(iphone(TOKEN), pushKit(VOIP_TOKEN)));
+        when(nativeSender.sendVoip(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
+
+        StepVerifier.create(service.deliverCall(ringing(), CALL)).verifyComplete();
+
+        verify(nativeSender).sendVoip(pushKit(VOIP_TOKEN),
+                new VoipPush.Ring("k1", "Appel vidéo", "lea", CallMedia.VIDEO, "conv1", "/call/k1"));
+        verify(nativeSender, never()).send(any(), any());
+    }
+
+    @Test
+    @DisplayName("a ringing call still alerts a user with no PushKit device, and still reaches the browsers")
+    void deliverCall_shouldAlert_whenTheUserHasNoVoipDevice() {
+        when(sender.enabled()).thenReturn(true);
+        when(nativeSender.enabled()).thenReturn(true);
+        when(preferences.find("bob")).thenReturn(Mono.empty());
+        when(subscriptions.findByUser("bob")).thenReturn(Flux.just(device("https://a/1")));
+        when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(iphone(TOKEN)));
+        when(sender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
+        when(nativeSender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
+
+        StepVerifier.create(service.deliverCall(ringing(), CALL)).verifyComplete();
+
+        verify(nativeSender).send(iphone(TOKEN), PushMessage.of(ringing()));
+        verify(sender).send(eq(device("https://a/1")), any());
+        verify(nativeSender, never()).sendVoip(any(), any());
+    }
+
+    @Test
+    @DisplayName("with calls switched off, a ringing call rings no PushKit device")
+    void deliverCall_shouldRingNothing_whenCallsAreOff() {
+        when(nativeSender.enabled()).thenReturn(true);
+        when(preferences.find("bob")).thenReturn(Mono.just(
+                new NotificationPreferences("bob", Map.of(NotificationCategory.CALLS, false))));
+
+        StepVerifier.create(service.deliverCall(ringing(), CALL)).verifyComplete();
+
+        verifyNoInteractions(apnsDevices);
+        verify(nativeSender, never()).sendVoip(any(), any());
+    }
+
+    @Test
+    @DisplayName("a PushKit token APNs says is gone is forgotten")
+    void deliverCall_shouldForgetAGoneVoipDevice() {
+        when(nativeSender.enabled()).thenReturn(true);
+        when(preferences.find("bob")).thenReturn(Mono.empty());
+        when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(pushKit(VOIP_TOKEN)));
+        when(nativeSender.sendVoip(any(), any())).thenReturn(Mono.just(PushResult.GONE));
+        when(apnsDevices.delete(VOIP_TOKEN)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.deliverCall(ringing(), CALL)).verifyComplete();
+
+        verify(apnsDevices).delete(VOIP_TOKEN);
+    }
+
+    @Test
+    @DisplayName("a PushKit send that errors costs that device only, and the delivery completes")
+    void deliverCall_shouldSwallowAVoipFailure() {
+        when(nativeSender.enabled()).thenReturn(true);
+        when(preferences.find("bob")).thenReturn(Mono.empty());
+        when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(pushKit(VOIP_TOKEN)));
+        when(nativeSender.sendVoip(any(), any())).thenReturn(Mono.error(new IllegalStateException("boom")));
+
+        StepVerifier.create(service.deliverCall(ringing(), CALL)).verifyComplete();
+    }
+
+    @Test
+    @DisplayName("a missed call, like any other notification, is an alert and never reaches a PushKit device")
+    void deliver_shouldNeverPushAnAlertToAVoipDevice() {
+        when(nativeSender.enabled()).thenReturn(true);
+        when(preferences.find("bob")).thenReturn(Mono.empty());
+        when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(iphone(TOKEN), pushKit(VOIP_TOKEN)));
+        when(nativeSender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
+
+        StepVerifier.create(service.deliver(missed())).verifyComplete();
+
+        verify(nativeSender).send(eq(iphone(TOKEN)), any());
+        verify(nativeSender, never()).send(eq(pushKit(VOIP_TOKEN)), any());
+        verify(nativeSender, never()).sendVoip(any(), any());
+    }
+
+    @Test
+    @DisplayName("a ringing call without its call facts is an ordinary alert")
+    void deliver_shouldAlertForARingingCall_withoutCallFacts() {
+        when(nativeSender.enabled()).thenReturn(true);
+        when(preferences.find("bob")).thenReturn(Mono.empty());
+        when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(iphone(TOKEN), pushKit(VOIP_TOKEN)));
+        when(nativeSender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
+
+        StepVerifier.create(service.deliver(ringing())).verifyComplete();
+
+        verify(nativeSender).send(eq(iphone(TOKEN)), any());
+        verify(nativeSender, never()).sendVoip(any(), any());
+    }
+
+    @Test
+    @DisplayName("a call that ended stops the ringing on each PushKit device, and only there")
+    void endRinging_shouldHangUpOnVoipDevices() {
+        when(nativeSender.enabled()).thenReturn(true);
+        when(preferences.find("bob")).thenReturn(Mono.empty());
+        when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(iphone(TOKEN), pushKit(VOIP_TOKEN)));
+        when(nativeSender.sendVoip(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
+
+        StepVerifier.create(service.endRinging("bob", "k1")).verifyComplete();
+
+        verify(nativeSender).sendVoip(pushKit(VOIP_TOKEN), new VoipPush.Hangup("k1"));
+        verify(nativeSender, never()).sendVoip(eq(iphone(TOKEN)), any());
+        verify(nativeSender, never()).send(any(), any());
+    }
+
+    @Test
+    @DisplayName("without APNs, nothing is read to hang up")
+    void endRinging_shouldDoNothing_whenApnsIsOff() {
+        when(nativeSender.enabled()).thenReturn(false);
+
+        StepVerifier.create(service.endRinging("bob", "k1")).verifyComplete();
+
+        verifyNoInteractions(preferences, apnsDevices);
+    }
+
+    @Test
+    @DisplayName("with calls switched off nothing rang, so nothing is hung up")
+    void endRinging_shouldDoNothing_whenCallsAreOff() {
+        when(nativeSender.enabled()).thenReturn(true);
+        when(preferences.find("bob")).thenReturn(Mono.just(
+                new NotificationPreferences("bob", Map.of(NotificationCategory.CALLS, false))));
+
+        StepVerifier.create(service.endRinging("bob", "k1")).verifyComplete();
+
+        verifyNoInteractions(apnsDevices);
+    }
+
+    @Test
+    @DisplayName("a gone PushKit token is forgotten on hang-up too, and a store failure never fails it")
+    void endRinging_shouldForgetGoneTokensAndSwallowFailures() {
+        when(nativeSender.enabled()).thenReturn(true);
+        when(preferences.find("bob")).thenReturn(Mono.empty());
+        when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(pushKit(VOIP_TOKEN)),
+                Flux.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+        when(nativeSender.sendVoip(any(), any())).thenReturn(Mono.just(PushResult.GONE));
+        when(apnsDevices.delete(VOIP_TOKEN)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.endRinging("bob", "k1")).verifyComplete();
+        StepVerifier.create(service.endRinging("bob", "k1")).verifyComplete();
+
+        verify(apnsDevices).delete(VOIP_TOKEN);
     }
 }

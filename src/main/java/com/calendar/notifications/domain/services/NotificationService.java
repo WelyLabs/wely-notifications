@@ -1,5 +1,6 @@
 package com.calendar.notifications.domain.services;
 
+import com.calendar.notifications.domain.models.IncomingCall;
 import com.calendar.notifications.domain.models.LiveUpdate;
 import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.ports.DeletedUserMarkers;
@@ -17,6 +18,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Function;
 import java.util.stream.Stream;
 
 /** The notification center: records each notification, streams it live and hands it to {@link PushService}. */
@@ -45,7 +47,15 @@ public class NotificationService {
     /** Records, streams and pushes the notification; empty when the recipient or the actor is deleted. */
     public Mono<Notification> notify(Notification draft) {
         return markers.anyDeleted(involved(draft))
-                .flatMap(deleted -> deleted ? Mono.<Notification>empty() : record(draft));
+                .flatMap(deleted -> deleted ? Mono.<Notification>empty() : record(draft, pushService::deliver));
+    }
+
+    /** Like {@link #notify}, for a ringing call: an iPhone with a PushKit token rings through CallKit. */
+    public Mono<Notification> notifyCall(Notification draft, IncomingCall call) {
+        return markers.anyDeleted(involved(draft))
+                .flatMap(deleted -> deleted
+                        ? Mono.<Notification>empty()
+                        : record(draft, notification -> pushService.deliverCall(notification, call)));
     }
 
     /** Newest first, before the given time when paging; the page size is kept between 1 and 100. */
@@ -86,7 +96,7 @@ public class NotificationService {
                 .then();
     }
 
-    private Mono<Notification> record(Notification draft) {
+    private Mono<Notification> record(Notification draft, Function<Notification, Mono<Void>> push) {
         Notification stamped = draft.withCreatedAt(clock.instant());
         Mono<Notification> saved = stamped.groupable() ? repository.group(stamped) : repository.insert(stamped);
         return saved
@@ -95,7 +105,7 @@ public class NotificationService {
                 .flatMap(notification -> {
                     live.publish(notification.recipientId(), new LiveUpdate.NotificationAdded(notification));
                     return announceUnreadCount(notification.recipientId())
-                            .then(pushService.deliver(notification))
+                            .then(Mono.defer(() -> push.apply(notification)))
                             .thenReturn(notification);
                 });
     }

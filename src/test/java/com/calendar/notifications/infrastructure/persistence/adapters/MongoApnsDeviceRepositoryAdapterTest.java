@@ -2,6 +2,7 @@ package com.calendar.notifications.infrastructure.persistence.adapters;
 
 import com.calendar.notifications.domain.models.ApnsDevice;
 import com.calendar.notifications.domain.models.ApnsEnvironment;
+import com.calendar.notifications.domain.models.ApnsPushKind;
 import com.calendar.notifications.infrastructure.persistence.entities.ApnsDeviceEntity;
 import com.calendar.notifications.infrastructure.persistence.mappers.ApnsDevicePersistenceMapper;
 import com.calendar.notifications.infrastructure.persistence.repositories.ApnsDeviceMongoRepository;
@@ -29,8 +30,9 @@ class MongoApnsDeviceRepositoryAdapterTest {
 
     private static final Instant NOW = Instant.parse("2026-10-15T10:00:00Z");
     private static final String TOKEN = "ab".repeat(32);
-    private static final ApnsDevice DEVICE = new ApnsDevice("bob", TOKEN, ApnsEnvironment.PRODUCTION, NOW);
-    private static final ApnsDeviceEntity ENTITY = new ApnsDeviceEntity(TOKEN, "bob", ApnsEnvironment.PRODUCTION, NOW);
+    private static final ApnsDevice DEVICE = new ApnsDevice("bob", TOKEN, ApnsEnvironment.PRODUCTION, ApnsPushKind.ALERT, NOW);
+    private static final ApnsDeviceEntity ENTITY = new ApnsDeviceEntity(TOKEN, "bob", ApnsEnvironment.PRODUCTION,
+            ApnsPushKind.ALERT, NOW);
 
     @Mock
     private ApnsDeviceMongoRepository repository;

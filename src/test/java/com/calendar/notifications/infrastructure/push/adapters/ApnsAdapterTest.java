@@ -3,6 +3,9 @@ package com.calendar.notifications.infrastructure.push.adapters;
 import com.calendar.notifications.configuration.PushProperties;
 import com.calendar.notifications.domain.models.ApnsDevice;
 import com.calendar.notifications.domain.models.ApnsEnvironment;
+import com.calendar.notifications.domain.models.CallMedia;
+import com.calendar.notifications.domain.models.VoipPush;
+import com.calendar.notifications.domain.models.ApnsPushKind;
 import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.models.NotificationType;
 import com.calendar.notifications.domain.models.PushMessage;
@@ -10,6 +13,7 @@ import com.calendar.notifications.domain.models.PushResult;
 import com.calendar.notifications.domain.models.PushUrgency;
 import com.calendar.notifications.infrastructure.push.crypto.P256;
 import com.calendar.notifications.infrastructure.push.mappers.ApnsPayloadMapper;
+import com.calendar.notifications.infrastructure.push.mappers.VoipPayloadMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -83,7 +87,8 @@ class ApnsAdapterTest {
 
     private ApnsAdapter adapter(PushProperties.Apns apns, Duration timeout) {
         return new ApnsAdapter(new PushProperties(null, apns, timeout), client,
-                Mappers.getMapper(ApnsPayloadMapper.class), objectMapper, Clock.fixed(NOW, ZoneOffset.UTC));
+                Mappers.getMapper(ApnsPayloadMapper.class), Mappers.getMapper(VoipPayloadMapper.class), objectMapper,
+                Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     private ApnsAdapter adapter() {
@@ -91,7 +96,7 @@ class ApnsAdapterTest {
     }
 
     private static ApnsDevice iphone(ApnsEnvironment environment) {
-        return new ApnsDevice("bob", TOKEN, environment, NOW);
+        return new ApnsDevice("bob", TOKEN, environment, ApnsPushKind.ALERT, NOW);
     }
 
     private static PushMessage ringing() {
@@ -332,5 +337,80 @@ class ApnsAdapterTest {
             DataBufferUtils.release(buffer);
             return bytes;
         }).block(Duration.ofSeconds(5));
+    }
+
+    private static ApnsDevice pushKit() {
+        return new ApnsDevice("bob", TOKEN, ApnsEnvironment.SANDBOX, ApnsPushKind.VOIP, NOW);
+    }
+
+    @Test
+    @DisplayName("a ring is a VoIP push to the .voip topic, priority 10, 30 seconds, no alert, every CallKit field")
+    void sendVoip_shouldPostARing() throws Exception {
+        VoipPush ring = new VoipPush.Ring("k1", "Appel vidéo", "lea", CallMedia.VIDEO, "conv1", "/call/k1");
+
+        StepVerifier.create(adapter().sendVoip(pushKit(), ring)).expectNext(PushResult.DELIVERED).verifyComplete();
+
+        MockClientHttpRequest request = sent.getFirst();
+        HttpHeaders headers = request.getHeaders();
+        assertThat(request.getURI()).isEqualTo(URI.create("https://api.sandbox.push.apple.com/3/device/" + TOKEN));
+        assertThat(verifies(headers.getFirst("authorization").substring("bearer ".length()))).isTrue();
+        assertThat(headers.getFirst("apns-topic")).isEqualTo(BUNDLE_ID + ".voip");
+        assertThat(headers.getFirst("apns-push-type")).isEqualTo("voip");
+        assertThat(headers.getFirst("apns-priority")).isEqualTo("10");
+        assertThat(headers.getFirst("apns-expiration")).isEqualTo(String.valueOf(NOW.getEpochSecond() + 30));
+        assertThat(headers.getFirst("apns-collapse-id")).isEqualTo("call-k1");
+
+        JsonNode body = objectMapper.readTree(bodyOf(request));
+        assertThat(body.get("aps").isObject()).isTrue();
+        assertThat(body.get("aps").size()).isZero();
+        assertThat(body.get("callId").asString()).isEqualTo("k1");
+        assertThat(body.get("caller").asString()).isEqualTo("Appel vidéo");
+        assertThat(body.get("callerId").asString()).isEqualTo("lea");
+        assertThat(body.get("media").asString()).isEqualTo("VIDEO");
+        assertThat(body.get("conversationId").asString()).isEqualTo("conv1");
+        assertThat(body.get("link").asString()).isEqualTo("/call/k1");
+        assertThat(body.size()).isEqualTo(7);
+    }
+
+    @Test
+    @DisplayName("a hang-up is a VoIP push of the call id and ended, collapsing with its ring")
+    void sendVoip_shouldPostAHangup() {
+        StepVerifier.create(adapter().sendVoip(pushKit(), new VoipPush.Hangup("k1")))
+                .expectNext(PushResult.DELIVERED)
+                .verifyComplete();
+
+        MockClientHttpRequest request = sent.getFirst();
+        assertThat(request.getHeaders().getFirst("apns-push-type")).isEqualTo("voip");
+        assertThat(request.getHeaders().getFirst("apns-collapse-id")).isEqualTo("call-k1");
+        JsonNode body = objectMapper.readTree(bodyOf(request));
+        assertThat(body.get("aps").size()).isZero();
+        assertThat(body.get("callId").asString()).isEqualTo("k1");
+        assertThat(body.get("ended").asBoolean()).isTrue();
+        assertThat(body.size()).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("a PushKit token APNs no longer knows is gone, and a refusal for another reason a failure")
+    void sendVoip_shouldMapTheAnswer() {
+        answer = refusal(400, "{\"reason\":\"BadDeviceToken\"}");
+        StepVerifier.create(adapter().sendVoip(pushKit(), new VoipPush.Hangup("k1")))
+                .expectNext(PushResult.GONE)
+                .verifyComplete();
+
+        answer = refusal(400, "{\"reason\":\"DeviceTokenNotForTopic\"}");
+        StepVerifier.create(adapter().sendVoip(pushKit(), new VoipPush.Hangup("k1")))
+                .expectNext(PushResult.FAILED)
+                .verifyComplete();
+    }
+
+    @Test
+    @DisplayName("without a key, no VoIP push is sent")
+    void sendVoip_shouldSendNothing_whenNoKeyIsConfigured() {
+        ApnsAdapter off = adapter(new PushProperties.Apns("", "", "", BUNDLE_ID), Duration.ofSeconds(5));
+
+        StepVerifier.create(off.sendVoip(pushKit(), new VoipPush.Hangup("k1")))
+                .expectNext(PushResult.FAILED)
+                .verifyComplete();
+        assertThat(sent).isEmpty();
     }
 }

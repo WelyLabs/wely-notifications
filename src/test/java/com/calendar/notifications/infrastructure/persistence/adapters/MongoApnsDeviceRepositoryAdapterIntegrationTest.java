@@ -2,6 +2,7 @@ package com.calendar.notifications.infrastructure.persistence.adapters;
 
 import com.calendar.notifications.domain.models.ApnsDevice;
 import com.calendar.notifications.domain.models.ApnsEnvironment;
+import com.calendar.notifications.domain.models.ApnsPushKind;
 import com.calendar.notifications.infrastructure.persistence.entities.ApnsDeviceEntity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -12,6 +13,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
+import org.bson.Document;
 import org.springframework.test.context.ActiveProfiles;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -52,18 +54,18 @@ class MongoApnsDeviceRepositoryAdapterIntegrationTest {
     }
 
     private static ApnsDevice device(String user, String token) {
-        return new ApnsDevice(user, token, ApnsEnvironment.PRODUCTION, NOW);
+        return new ApnsDevice(user, token, ApnsEnvironment.PRODUCTION, ApnsPushKind.ALERT, NOW);
     }
 
     @Test
     @DisplayName("registering the same token again replaces it, moving the device to the new account")
     void save_shouldUpsertByToken() {
         adapter.save(device("bob", TOKEN)).block();
-        adapter.save(new ApnsDevice("carl", TOKEN, ApnsEnvironment.SANDBOX, NOW)).block();
+        adapter.save(new ApnsDevice("carl", TOKEN, ApnsEnvironment.SANDBOX, ApnsPushKind.ALERT, NOW)).block();
 
         assertThat(adapter.findByUser("bob").collectList().block()).isEmpty();
         assertThat(adapter.findByUser("carl").collectList().block())
-                .containsExactly(new ApnsDevice("carl", TOKEN, ApnsEnvironment.SANDBOX, NOW));
+                .containsExactly(new ApnsDevice("carl", TOKEN, ApnsEnvironment.SANDBOX, ApnsPushKind.ALERT, NOW));
         assertThat(mongoTemplate.count(new Query(), ApnsDeviceEntity.class).block()).isEqualTo(1L);
     }
 
@@ -109,5 +111,21 @@ class MongoApnsDeviceRepositoryAdapterIntegrationTest {
         adapter.delete(TOKEN).block();
 
         assertThat(adapter.findByUser("bob").collectList().block()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a document stored before kinds existed reads as ALERT, beside the same user's VOIP token")
+    void findByUser_shouldReadALegacyDocumentAsAlert() {
+        mongoTemplate.getCollection("apns_devices")
+                .flatMap(collection -> reactor.core.publisher.Mono.from(collection.insertOne(
+                        new Document("_id", TOKEN).append("userId", "bob").append("environment", "PRODUCTION")
+                                .append("createdAt", java.util.Date.from(NOW)))))
+                .block();
+        adapter.save(new ApnsDevice("bob", "cd".repeat(32), ApnsEnvironment.PRODUCTION, ApnsPushKind.VOIP, NOW))
+                .block();
+
+        assertThat(adapter.findByUser("bob").collectList().block()).containsExactlyInAnyOrder(
+                device("bob", TOKEN),
+                new ApnsDevice("bob", "cd".repeat(32), ApnsEnvironment.PRODUCTION, ApnsPushKind.VOIP, NOW));
     }
 }

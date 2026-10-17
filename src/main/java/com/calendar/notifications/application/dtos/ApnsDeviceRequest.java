@@ -10,8 +10,10 @@ import jakarta.validation.constraints.Size;
  *
  * @param token       the device token in hex, as the app formats the Data it receives
  * @param environment SANDBOX for a development build, PRODUCTION for TestFlight and the App Store
+ * @param kind        ALERT for the notification token, VOIP for PushKit's; optional, ALERT when missing
  */
 public record ApnsDeviceRequest(
         @NotBlank @Size(max = 200) String token,
-        @NotNull @Pattern(regexp = "SANDBOX|PRODUCTION") String environment
+        @NotNull @Pattern(regexp = "SANDBOX|PRODUCTION") String environment,
+        @Pattern(regexp = "ALERT|VOIP") String kind
 ) {}

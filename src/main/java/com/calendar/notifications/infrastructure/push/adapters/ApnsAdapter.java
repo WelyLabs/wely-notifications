@@ -6,9 +6,11 @@ import com.calendar.notifications.domain.models.ApnsEnvironment;
 import com.calendar.notifications.domain.models.PushMessage;
 import com.calendar.notifications.domain.models.PushResult;
 import com.calendar.notifications.domain.models.PushUrgency;
+import com.calendar.notifications.domain.models.VoipPush;
 import com.calendar.notifications.domain.ports.NativePushSender;
 import com.calendar.notifications.infrastructure.push.crypto.ApnsTokenProvider;
 import com.calendar.notifications.infrastructure.push.mappers.ApnsPayloadMapper;
+import com.calendar.notifications.infrastructure.push.mappers.VoipPayloadMapper;
 import com.calendar.notifications.infrastructure.push.models.ApnsError;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,10 +27,12 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Set;
+import java.util.concurrent.Callable;
 
 /**
  * Native iOS push: one HTTP/2 POST per device to APNs, authenticated by a provider token signed with
- * the team's .p8 key. Off, with a single warning, while no key is configured.
+ * the team's .p8 key, either an alert or a PushKit (VoIP) push. Off, with a single warning, while no
+ * key is configured.
  */
 @Component
 public class ApnsAdapter implements NativePushSender {
@@ -40,11 +44,16 @@ public class ApnsAdapter implements NativePushSender {
     private static final String HIGH_PRIORITY = "10";
     private static final String NORMAL_PRIORITY = "5";
     private static final String PUSH_TYPE_ALERT = "alert";
+    private static final String PUSH_TYPE_VOIP = "voip";
+    // PushKit pushes go to the app's VoIP topic, the bundle id with this suffix.
+    static final String VOIP_TOPIC_SUFFIX = ".voip";
+    private static final String CALL_TAG_PREFIX = "call-";
     // Besides 410, the reasons APNs gives for a token that will never work again.
     private static final Set<String> GONE_REASONS = Set.of("BadDeviceToken", "Unregistered");
 
     private final WebClient webClient;
     private final ApnsPayloadMapper payloadMapper;
+    private final VoipPayloadMapper voipPayloadMapper;
     private final ObjectMapper objectMapper;
     private final Clock clock;
     private final Duration timeout;
@@ -52,9 +61,11 @@ public class ApnsAdapter implements NativePushSender {
     private final ApnsTokenProvider tokens;
 
     public ApnsAdapter(PushProperties properties, @Qualifier("apnsWebClient") WebClient webClient,
-                       ApnsPayloadMapper payloadMapper, ObjectMapper objectMapper, Clock clock) {
+                       ApnsPayloadMapper payloadMapper, VoipPayloadMapper voipPayloadMapper, ObjectMapper objectMapper,
+                       Clock clock) {
         this.webClient = webClient;
         this.payloadMapper = payloadMapper;
+        this.voipPayloadMapper = voipPayloadMapper;
         this.objectMapper = objectMapper;
         this.clock = clock;
         this.timeout = properties.timeout();
@@ -72,8 +83,32 @@ public class ApnsAdapter implements NativePushSender {
         if (!enabled()) {
             return Mono.just(PushResult.FAILED);
         }
-        return Mono.fromCallable(() -> objectMapper.writeValueAsBytes(payloadMapper.toPayload(message)))
-                .flatMap(body -> post(device, message, body))
+        return deliver(device, () -> new Request(bundleId, PUSH_TYPE_ALERT, priorityOf(message.urgency()),
+                message.ttlSeconds(), collapseId(message.tag()),
+                objectMapper.writeValueAsBytes(payloadMapper.toPayload(message))));
+    }
+
+    /** Always priority 10 and the call's 30-second life; the ring and its hang-up share one collapse id. */
+    @Override
+    public Mono<PushResult> sendVoip(ApnsDevice device, VoipPush push) {
+        if (!enabled()) {
+            return Mono.just(PushResult.FAILED);
+        }
+        return deliver(device, () -> new Request(bundleId + VOIP_TOPIC_SUFFIX, PUSH_TYPE_VOIP, HIGH_PRIORITY,
+                VoipPush.TTL_SECONDS, collapseId(CALL_TAG_PREFIX + push.callId()),
+                objectMapper.writeValueAsBytes(voipPayloadOf(push))));
+    }
+
+    private Object voipPayloadOf(VoipPush push) {
+        return switch (push) {
+            case VoipPush.Ring ring -> voipPayloadMapper.toPayload(ring);
+            case VoipPush.Hangup hangup -> voipPayloadMapper.toPayload(hangup);
+        };
+    }
+
+    private Mono<PushResult> deliver(ApnsDevice device, Callable<Request> request) {
+        return Mono.fromCallable(request)
+                .flatMap(built -> post(device, built))
                 .timeout(timeout)
                 .onErrorResume(error -> {
                     // The token is not logged: it is a capability to push to someone's phone.
@@ -82,20 +117,23 @@ public class ApnsAdapter implements NativePushSender {
                 });
     }
 
-    private Mono<PushResult> post(ApnsDevice device, PushMessage message, byte[] body) {
+    /** What differs between an alert and a VoIP push; the collapse id is null when there is none. */
+    private record Request(String topic, String pushType, String priority, long ttlSeconds, String collapseId,
+                           byte[] body) {}
+
+    private Mono<PushResult> post(ApnsDevice device, Request built) {
         WebClient.RequestBodySpec request = webClient.post()
                 .uri(deviceUri(device))
                 .header("authorization", "bearer " + tokens.token())
-                .header("apns-topic", bundleId)
-                .header("apns-push-type", PUSH_TYPE_ALERT)
-                .header("apns-priority", priorityOf(message.urgency()))
-                .header("apns-expiration", String.valueOf(clock.instant().getEpochSecond() + message.ttlSeconds()))
+                .header("apns-topic", built.topic())
+                .header("apns-push-type", built.pushType())
+                .header("apns-priority", built.priority())
+                .header("apns-expiration", String.valueOf(clock.instant().getEpochSecond() + built.ttlSeconds()))
                 .contentType(MediaType.APPLICATION_JSON);
-        String collapseId = collapseId(message.tag());
-        if (collapseId != null) {
-            request = request.header("apns-collapse-id", collapseId);
+        if (built.collapseId() != null) {
+            request = request.header("apns-collapse-id", built.collapseId());
         }
-        return request.bodyValue(body)
+        return request.bodyValue(built.body())
                 .exchangeToMono(response -> {
                     int status = response.statusCode().value();
                     if (response.statusCode().is2xxSuccessful()) {

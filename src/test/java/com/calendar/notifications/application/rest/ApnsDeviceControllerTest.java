@@ -4,6 +4,7 @@ import com.calendar.notifications.application.dtos.ApnsDeviceRequest;
 import com.calendar.notifications.application.mappers.ApnsDeviceRestMapper;
 import com.calendar.notifications.domain.models.ApnsDevice;
 import com.calendar.notifications.domain.models.ApnsEnvironment;
+import com.calendar.notifications.domain.models.ApnsPushKind;
 import com.calendar.notifications.domain.services.PushService;
 import com.calendar.notifications.exception.NotificationsErrorCode;
 import com.calendar.notifications.exception.NotificationsException;
@@ -45,10 +46,10 @@ class ApnsDeviceControllerTest {
     @DisplayName("an iOS device is registered for the token's user")
     void register_shouldRegisterForTheCaller() {
         when(jwt.getClaimAsString("businessId")).thenReturn("bob");
-        ApnsDevice expected = new ApnsDevice(null, TOKEN, ApnsEnvironment.PRODUCTION, null);
+        ApnsDevice expected = new ApnsDevice(null, TOKEN, ApnsEnvironment.PRODUCTION, ApnsPushKind.ALERT, null);
         when(pushService.registerDevice("bob", expected)).thenReturn(Mono.empty());
 
-        StepVerifier.create(controller.register(jwt, new ApnsDeviceRequest(TOKEN, "PRODUCTION"))).verifyComplete();
+        StepVerifier.create(controller.register(jwt, new ApnsDeviceRequest(TOKEN, "PRODUCTION", null))).verifyComplete();
 
         verify(pushService).registerDevice("bob", expected);
     }
@@ -60,7 +61,7 @@ class ApnsDeviceControllerTest {
         when(pushService.registerDevice(eq("bob"), any()))
                 .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.ACCOUNT_DELETED)));
 
-        StepVerifier.create(controller.register(jwt, new ApnsDeviceRequest(TOKEN, "SANDBOX")))
+        StepVerifier.create(controller.register(jwt, new ApnsDeviceRequest(TOKEN, "SANDBOX", "VOIP")))
                 .expectErrorSatisfies(error -> assertThat(((NotificationsException) error).getErrorCode())
                         .isEqualTo(NotificationsErrorCode.ACCOUNT_DELETED))
                 .verify();

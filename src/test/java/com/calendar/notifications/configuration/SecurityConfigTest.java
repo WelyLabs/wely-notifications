@@ -109,7 +109,8 @@ class SecurityConfigTest {
 
         verify(apnsDevices).save(org.mockito.ArgumentMatchers.argThat((ApnsDevice device) ->
                 "bob".equals(device.userId()) && APNS_TOKEN.equals(device.token())
-                        && device.environment() == ApnsEnvironment.SANDBOX && device.createdAt() != null));
+                        && device.environment() == ApnsEnvironment.SANDBOX && device.createdAt() != null
+                        && device.kind() == com.calendar.notifications.domain.models.ApnsPushKind.ALERT));
     }
 
     @Test
@@ -150,6 +151,27 @@ class SecurityConfigTest {
                 .exchange()
                 .expectStatus().isEqualTo(410)
                 .expectBody().jsonPath("$.code").isEqualTo("NTF-BUS-002");
+    }
+
+    @Test
+    @DisplayName("a PushKit token registers as VOIP; an unknown kind answers 400 NTF-VAL-001")
+    void registerApnsDevice_shouldTakeTheKind() {
+        when(apnsDevices.save(any())).thenReturn(Mono.empty());
+
+        as("bob").put().uri("/notifications-service/push/apns-devices")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"token\":\"" + APNS_TOKEN + "\",\"environment\":\"PRODUCTION\",\"kind\":\"VOIP\"}")
+                .exchange()
+                .expectStatus().isNoContent();
+        as("bob").put().uri("/notifications-service/push/apns-devices")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"token\":\"" + APNS_TOKEN + "\",\"environment\":\"PRODUCTION\",\"kind\":\"PUSHKIT\"}")
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody().jsonPath("$.code").isEqualTo("NTF-VAL-001");
+
+        verify(apnsDevices).save(org.mockito.ArgumentMatchers.argThat((ApnsDevice device) ->
+                device.kind() == com.calendar.notifications.domain.models.ApnsPushKind.VOIP));
     }
 
     @Test

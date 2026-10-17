@@ -1,14 +1,21 @@
 package com.calendar.notifications.infrastructure.messaging.adapters;
 
+import com.calendar.notifications.domain.models.CallMedia;
+import com.calendar.notifications.domain.models.IncomingCall;
 import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.models.NotificationType;
 import com.calendar.notifications.domain.services.NotificationService;
+import com.calendar.notifications.domain.services.PushService;
+import com.calendar.notifications.infrastructure.messaging.mappers.IncomingCallMapper;
+import com.calendar.notifications.infrastructure.messaging.models.CallEventBroadcastDTO;
 import com.calendar.notifications.infrastructure.messaging.notices.DateNoticeFormatter;
 import com.calendar.notifications.infrastructure.messaging.notices.NotificationDrafts;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mapstruct.factory.Mappers;
+import org.mockito.InOrder;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -19,10 +26,14 @@ import reactor.core.publisher.Mono;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.time.ZoneId;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
@@ -34,14 +45,16 @@ class CallEventsConsumerTest {
 
     @Mock
     private NotificationService notificationService;
+    @Mock
+    private PushService pushService;
 
     private CallEventsConsumer consumer;
 
     @BeforeEach
     void setUp() {
-        consumer = new CallEventsConsumer(notificationService,
+        consumer = new CallEventsConsumer(notificationService, pushService,
                 new NotificationDrafts(new DateNoticeFormatter(ZoneId.of("Europe/Paris"))),
-                new RecordReader(JsonMapper.builder().build()));
+                Mappers.getMapper(IncomingCallMapper.class), new RecordReader(JsonMapper.builder().build()));
     }
 
     static Message<byte[]> record(String json) {
@@ -56,36 +69,78 @@ class CallEventsConsumerTest {
     }
 
     @Test
-    @DisplayName("a ringing call and an unanswered one each notify the recipient")
+    @DisplayName("a ringing call rings with its call facts; an unanswered one stops the ringing, then is told as missed")
     void callEvents_shouldNotifyRingingAndMissedCalls() {
+        when(notificationService.notifyCall(any(), any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
         when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
+        when(pushService.endRinging("bob", "k1")).thenReturn(Mono.empty());
 
         consumer.callEvents().accept(Flux.just(call("RINGING", "bob", "RINGING"), call("ENDED", "bob", "MISSED")));
 
+        ArgumentCaptor<Notification> rung = ArgumentCaptor.forClass(Notification.class);
+        verify(notificationService, timeout(2000)).notifyCall(rung.capture(),
+                eq(new IncomingCall("k1", "lea", CallMedia.VIDEO, "conv1")));
+        assertThat(rung.getValue().type()).isEqualTo(NotificationType.CALL_INCOMING);
         ArgumentCaptor<Notification> notified = ArgumentCaptor.forClass(Notification.class);
-        verify(notificationService, timeout(2000).times(2)).notify(notified.capture());
-        assertThat(notified.getAllValues()).extracting(Notification::type)
-                .containsExactly(NotificationType.CALL_INCOMING, NotificationType.CALL_MISSED);
+        verify(notificationService, timeout(2000)).notify(notified.capture());
+        assertThat(notified.getValue().type()).isEqualTo(NotificationType.CALL_MISSED);
+        InOrder order = inOrder(pushService, notificationService);
+        order.verify(pushService).endRinging("bob", "k1");
+        order.verify(notificationService).notify(any());
     }
 
     @Test
-    @DisplayName("an answered call notifies nobody")
-    void callEvents_shouldIgnoreAnAnsweredCall() {
+    @DisplayName("an answered call notifies nobody, but still stops the ringing of a member who never joined")
+    void callEvents_shouldOnlyHangUp_forAnAnsweredCall() {
+        when(pushService.endRinging("bob", "k1")).thenReturn(Mono.empty());
+
         consumer.callEvents().accept(Flux.just(call("ENDED", "bob", "ENDED")));
 
+        verify(pushService, timeout(2000)).endRinging("bob", "k1");
         verify(notificationService, never()).notify(any());
+        verify(notificationService, never()).notifyCall(any(), any());
+    }
+
+    @Test
+    @DisplayName("the caller's own ENDED stops nothing")
+    void callEvents_shouldNotHangUpTheCaller() {
+        consumer.callEvents().accept(Flux.just(call("ENDED", "lea", "MISSED")));
+
+        verify(pushService, timeout(500).times(0)).endRinging(any(), any());
+    }
+
+    private static CallEventBroadcastDTO ended(String recipient, String startedBy,
+                                               List<CallEventBroadcastDTO.ParticipantDTO> participants) {
+        return new CallEventBroadcastDTO("ENDED", recipient, startedBy, new CallEventBroadcastDTO.CallDTO("k1", "conv1",
+                startedBy, "AUDIO", "ENDED", Instant.EPOCH, Instant.EPOCH, List.of("lea", "bob"), participants));
+    }
+
+    @Test
+    @DisplayName("ringing stops for an ENDED call's members who neither started it nor are in it")
+    void stopsRinging_shouldHoldForMembersOutsideTheCall() {
+        CallEventBroadcastDTO.ParticipantDTO bobIn = new CallEventBroadcastDTO.ParticipantDTO("bob", "s1",
+                Instant.EPOCH, Instant.EPOCH, List.of());
+
+        assertThat(CallEventsConsumer.stopsRinging(ended("bob", "lea", List.of()))).isTrue();
+        assertThat(CallEventsConsumer.stopsRinging(ended("bob", "lea", null))).isTrue();
+        assertThat(CallEventsConsumer.stopsRinging(ended("bob", "lea", List.of(bobIn)))).isFalse();
+        assertThat(CallEventsConsumer.stopsRinging(ended("lea", "lea", List.of()))).isFalse();
+        assertThat(CallEventsConsumer.stopsRinging(ended(null, "lea", List.of()))).isFalse();
+        assertThat(CallEventsConsumer.stopsRinging(new CallEventBroadcastDTO("ENDED", "bob", "lea", null))).isFalse();
+        assertThat(CallEventsConsumer.stopsRinging(new CallEventBroadcastDTO("RINGING", "bob", "lea",
+                ended("bob", "lea", List.of()).call()))).isFalse();
     }
 
     @Test
     @DisplayName("an unreadable record and a failing notification are dropped, and the next record still read")
     void callEvents_shouldKeepConsuming_afterAFailure() {
-        when(notificationService.notify(any()))
+        when(notificationService.notifyCall(any(), any()))
                 .thenReturn(Mono.error(new IllegalStateException("store down")))
                 .thenAnswer(call -> Mono.just(call.getArgument(0)));
 
         consumer.callEvents().accept(Flux.just(record("{not json"), call("RINGING", "bob", "RINGING"),
                 call("RINGING", "carl", "RINGING")));
 
-        verify(notificationService, timeout(2000).times(2)).notify(any());
+        verify(notificationService, timeout(2000).times(2)).notifyCall(any(), any());
     }
 }

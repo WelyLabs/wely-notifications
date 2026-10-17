@@ -1,11 +1,15 @@
 package com.calendar.notifications.domain.services;
 
 import com.calendar.notifications.domain.models.ApnsDevice;
+import com.calendar.notifications.domain.models.IncomingCall;
 import com.calendar.notifications.domain.models.Notification;
+import com.calendar.notifications.domain.models.NotificationCategory;
+import com.calendar.notifications.domain.models.NotificationType;
 import com.calendar.notifications.domain.models.NotificationPreferences;
 import com.calendar.notifications.domain.models.PushMessage;
 import com.calendar.notifications.domain.models.PushResult;
 import com.calendar.notifications.domain.models.PushSubscription;
+import com.calendar.notifications.domain.models.VoipPush;
 import com.calendar.notifications.domain.ports.ApnsDeviceRepository;
 import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.NativePushSender;
@@ -19,6 +23,7 @@ import reactor.core.publisher.Mono;
 
 import java.time.Clock;
 import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 
 /** A user's devices and push preferences, and delivery of a notification to those devices, Web Push and APNs. */
@@ -100,6 +105,33 @@ public class PushService {
      * whatever happens to its push, and an expired device is forgotten.
      */
     public Mono<Void> deliver(Notification notification) {
+        return deliver(notification, null);
+    }
+
+    /**
+     * Like {@link #deliver}, for a ringing call: a recipient with a PushKit token rings through CallKit
+     * on those devices, and gets no alert on the others; browsers are pushed as usual.
+     */
+    public Mono<Void> deliverCall(Notification notification, IncomingCall call) {
+        return deliver(notification, call);
+    }
+
+    /** Stops the CallKit screen of a call that ended before the recipient answered; never fails. */
+    public Mono<Void> endRinging(String recipientId, String callId) {
+        if (!nativeSender.enabled()) {
+            return Mono.empty();
+        }
+        VoipPush hangup = new VoipPush.Hangup(callId);
+        return preferences(recipientId)
+                .filter(chosen -> chosen.allowsPush(NotificationCategory.CALLS))
+                .flatMapMany(chosen -> apnsDevices.findByUser(recipientId))
+                .filter(ApnsDevice::isVoip)
+                .flatMap(device -> sendVoip(device, hangup))
+                .then()
+                .onErrorResume(error -> skipped("hang-up of call " + callId, error));
+    }
+
+    private Mono<Void> deliver(Notification notification, IncomingCall call) {
         boolean webPush = sender.enabled();
         boolean apns = nativeSender.enabled();
         if (!webPush && !apns) {
@@ -111,7 +143,7 @@ public class PushService {
                 .filter(chosen -> chosen.allowsPush(notification.category()))
                 .flatMapMany(chosen -> Flux.merge(
                         webPush ? toBrowsers(notification, message) : Flux.<Void>empty(),
-                        apns ? toIosDevices(notification, message) : Flux.<Void>empty()))
+                        apns ? toIosDevices(notification, message, call) : Flux.<Void>empty()))
                 .then()
                 .onErrorResume(error -> skipped(notification, error));
     }
@@ -137,15 +169,33 @@ public class PushService {
                 .onErrorResume(error -> skipped(notification, error));
     }
 
-    private Flux<Void> toIosDevices(Notification notification, PushMessage message) {
+    // A VOIP device never gets an alert; a ringing call goes to the VOIP devices alone when there are any.
+    private Flux<Void> toIosDevices(Notification notification, PushMessage message, IncomingCall call) {
         return apnsDevices.findByUser(notification.recipientId())
-                .flatMap(device -> send(device, message))
+                .collectList()
+                .flatMapMany(devices -> {
+                    List<ApnsDevice> voip = devices.stream().filter(ApnsDevice::isVoip).toList();
+                    if (rings(notification, call) && !voip.isEmpty()) {
+                        VoipPush ring = VoipPush.Ring.of(notification, call);
+                        return Flux.fromIterable(voip).flatMap(device -> sendVoip(device, ring));
+                    }
+                    return Flux.fromIterable(devices)
+                            .filter(device -> !device.isVoip())
+                            .flatMap(device -> send(device, message));
+                })
                 .onErrorResume(error -> skipped(notification, error));
     }
 
+    private static boolean rings(Notification notification, IncomingCall call) {
+        return call != null && notification.type() == NotificationType.CALL_INCOMING;
+    }
+
     private static Mono<Void> skipped(Notification notification, Throwable error) {
-        LOG.log(System.Logger.Level.WARNING, "Push skipped for notification {0}: {1}",
-                notification.id(), error.getMessage());
+        return skipped("notification " + notification.id(), error);
+    }
+
+    private static Mono<Void> skipped(String what, Throwable error) {
+        LOG.log(System.Logger.Level.WARNING, "Push skipped for {0}: {1}", what, error.getMessage());
         return Mono.empty();
     }
 
@@ -159,6 +209,14 @@ public class PushService {
 
     private Flux<Void> send(ApnsDevice device, PushMessage message) {
         return nativeSender.send(device, message)
+                .filter(PushResult.GONE::equals)
+                .flatMap(gone -> apnsDevices.delete(device.token()))
+                .onErrorResume(PushService::deviceFailed)
+                .flux();
+    }
+
+    private Flux<Void> sendVoip(ApnsDevice device, VoipPush push) {
+        return nativeSender.sendVoip(device, push)
                 .filter(PushResult.GONE::equals)
                 .flatMap(gone -> apnsDevices.delete(device.token()))
                 .onErrorResume(PushService::deviceFailed)

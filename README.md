@@ -113,7 +113,7 @@ Toutes les routes exigent un JWT ; l'utilisateur est **toujours** le claim `busi
 | `GET` | `/push/public-key` | — | **200** `{ "publicKey" }`, vide si le push n'est pas configuré |
 | `PUT` | `/push/subscriptions` | `{ "endpoint", "keys": { "p256dh", "auth" }, "label"? }` | **204**; same endpoint → replaced and moved to the caller; deleted account → **410** `NTF-BUS-002` |
 | `DELETE` | `/push/subscriptions?endpoint=…` | — | **204** ; n'efface que l'appareil de l'appelant |
-| `PUT` | `/push/apns-devices` | `{ "token": "<hex>", "environment": "SANDBOX" \| "PRODUCTION" }` | **204**; same token → replaced and moved to the caller; bad body → **400** `NTF-VAL-001`; token not hex 64–200 → **400** `NTF-VAL-002`; deleted account → **410** `NTF-BUS-002` |
+| `PUT` | `/push/apns-devices` | `{ "token": "<hex>", "environment": "SANDBOX" \| "PRODUCTION", "kind"?: "ALERT" \| "VOIP" }` (`kind` defaults to `ALERT`) | **204**; same token → replaced and moved to the caller; bad body → **400** `NTF-VAL-001`; token not hex 64–200 → **400** `NTF-VAL-002`; deleted account → **410** `NTF-BUS-002` |
 | `DELETE` | `/push/apns-devices?token=<hex>` | — | **204**; only removes the caller's own device |
 | `GET` | `/preferences` | — | **200** `{ "calls", "messages", "events", "friends" }` |
 | `PUT` | `/preferences` | the four booleans | **200**, echoing what was saved; deleted account → **410** `NTF-BUS-002` |
@@ -220,6 +220,32 @@ What is sent, with the JDK and Reactor Netty alone:
 ```
 
 `interruption-level` is `time-sensitive` for calls (the app needs the *Time Sensitive Notifications* capability for it to break through Focus) and `active` otherwise. `link` and `type` are the same as in Web Push.
+
+### VoIP pushes (PushKit) for incoming calls
+
+An iPhone registers **two tokens**: its notification token with `kind` `ALERT` (or no `kind`), and its PushKit token with `kind` `VOIP`. Both live in `apns_devices`; a document stored before kinds existed reads as `ALERT`. A `VOIP` device never receives an alert.
+
+- **A ringing call** (`CALL_INCOMING`) goes to the recipient's `VOIP` devices as a VoIP push, so the app rings through CallKit even when it is closed. If the recipient has at least one `VOIP` device, their `ALERT` devices get no alert for it (CallKit replaces it); without one, the alert is sent as before. Web Push to browsers is unchanged.
+- **A call that ends** (`ENDED`, whatever its status: missed, declined or answered by others) sends a hang-up to the `VOIP` devices of every member who did not start it and is not among its participants, before the missed call is recorded.
+- `CALL_MISSED` and every other type stay alert-only. With the **calls** preference off, neither push is sent. A token APNs answers **410** or **400** `BadDeviceToken` / `Unregistered` to is forgotten.
+- Headers: `apns-push-type: voip`, `apns-topic: <bundle id>.voip`, `apns-priority: 10`, `apns-expiration` = now + 30 s, `apns-collapse-id: call-<callId>` (a hang-up replaces its ring when the ring is still waiting at APNs). The same `.p8` key signs both.
+
+Ring, with no alert in `aps`: the app reports the call to CallKit from these fields alone, before calling any API.
+
+```json
+{ "aps": {}, "callId": "<id>", "caller": "Appel vidéo", "callerId": "<businessId>", "media": "VIDEO",
+  "conversationId": "<id>", "link": "/call/<id>" }
+```
+
+`media` is `AUDIO` or `VIDEO`. `caller` is the notification's title: `CALL_EVENTS` carry user ids only, so the app should show it until it has resolved `callerId` to a name, then update the CallKit call.
+
+Hang-up:
+
+```json
+{ "aps": {}, "callId": "<id>", "ended": true }
+```
+
+Since iOS 13, every VoIP push must be reported to CallKit: when a hang-up arrives for a call the app is not ringing, the app must report it and end it at once.
 
 `ApnsAdapterTest` checks every header and the body against a stub exchange, and verifies the token's signature with the key pair's public half; `ApnsTokenProviderTest` checks the 50-minute cache.
 

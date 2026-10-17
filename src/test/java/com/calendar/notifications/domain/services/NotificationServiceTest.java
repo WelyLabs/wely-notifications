@@ -1,5 +1,7 @@
 package com.calendar.notifications.domain.services;
 
+import com.calendar.notifications.domain.models.CallMedia;
+import com.calendar.notifications.domain.models.IncomingCall;
 import com.calendar.notifications.domain.models.LiveUpdate;
 import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.models.NotificationType;
@@ -318,5 +320,39 @@ class NotificationServiceTest {
         StepVerifier.create(service.announceUnreadCount("bob")).verifyComplete();
 
         verify(live).publish("bob", new LiveUpdate.UnreadChanged(6));
+    }
+
+    @Test
+    @DisplayName("a ringing call is stored and streamed like any notification, then handed over with its call facts")
+    void notifyCall_shouldStoreStreamAndDeliverTheCall() {
+        deleted();
+        IncomingCall call = new IncomingCall("k1", "lea", CallMedia.AUDIO, "conv1");
+        Notification ringing = Notification.draft("bob", NotificationType.CALL_INCOMING, "Appel audio",
+                "On t'appelle sur Wely", "/call/k1", "k1", "lea");
+        when(repository.insert(any())).thenAnswer(invocation -> Mono.just(invocation.<Notification>getArgument(0).withId("n1")));
+        when(repository.countUnread("bob")).thenReturn(Mono.just(1L));
+        when(pushService.deliverCall(any(), eq(call))).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.notifyCall(ringing, call))
+                .assertNext(saved -> assertThat(saved.title()).isEqualTo("Appel audio#1"))
+                .verifyComplete();
+
+        ArgumentCaptor<Notification> delivered = ArgumentCaptor.forClass(Notification.class);
+        verify(pushService).deliverCall(delivered.capture(), eq(call));
+        assertThat(delivered.getValue().title()).isEqualTo("Appel audio#1");
+        verify(pushService, never()).deliver(any());
+        verify(live, times(2)).publish(eq("bob"), any());
+    }
+
+    @Test
+    @DisplayName("a call from or to a deleted account rings nobody and writes nothing")
+    void notifyCall_shouldDropTheCall_whenSomeoneIsErased() {
+        deleted("lea");
+
+        StepVerifier.create(service.notifyCall(Notification.draft("bob", NotificationType.CALL_INCOMING, "Appel audio",
+                "On t'appelle sur Wely", "/call/k1", "k1", "lea"), new IncomingCall("k1", "lea", CallMedia.AUDIO, "c")))
+                .verifyComplete();
+
+        verifyNoInteractions(repository, live, pushService);
     }
 }
