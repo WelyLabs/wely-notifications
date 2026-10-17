@@ -1,5 +1,6 @@
 package com.calendar.notifications.domain.services;
 
+import com.calendar.notifications.domain.ports.ApnsDeviceRepository;
 import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.LiveNotifications;
 import com.calendar.notifications.domain.ports.NotificationRepository;
@@ -19,17 +20,20 @@ public class AccountErasureService {
     private final DeletedUserMarkers markers;
     private final NotificationRepository notifications;
     private final SubscriptionRepository subscriptions;
+    private final ApnsDeviceRepository apnsDevices;
     private final PreferencesRepository preferences;
     private final LiveNotifications live;
     private final NotificationService notificationService;
     private final Clock clock;
 
     public AccountErasureService(DeletedUserMarkers markers, NotificationRepository notifications,
-                                 SubscriptionRepository subscriptions, PreferencesRepository preferences,
-                                 LiveNotifications live, NotificationService notificationService, Clock clock) {
+                                 SubscriptionRepository subscriptions, ApnsDeviceRepository apnsDevices,
+                                 PreferencesRepository preferences, LiveNotifications live,
+                                 NotificationService notificationService, Clock clock) {
         this.markers = markers;
         this.notifications = notifications;
         this.subscriptions = subscriptions;
+        this.apnsDevices = apnsDevices;
         this.preferences = preferences;
         this.live = live;
         this.notificationService = notificationService;
@@ -42,6 +46,7 @@ public class AccountErasureService {
                 .then(Mono.fromRunnable(() -> live.close(userId)))
                 // Devices first: nothing can be pushed while the rest is deleted.
                 .then(Mono.defer(() -> subscriptions.deleteByUser(userId)))
+                .then(Mono.defer(() -> apnsDevices.deleteByUser(userId)))
                 .then(Mono.defer(() -> preferences.delete(userId)))
                 .then(Mono.defer(() -> notifications.deleteByRecipient(userId)))
                 .then(Mono.defer(() -> notifications.deleteByActor(userId)))

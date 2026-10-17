@@ -1,9 +1,11 @@
 package com.calendar.notifications.configuration;
 
+import com.calendar.notifications.domain.ports.ApnsDeviceRepository;
 import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.DeletedUsersSource;
 import com.calendar.notifications.domain.ports.EventMembers;
 import com.calendar.notifications.domain.ports.LiveNotifications;
+import com.calendar.notifications.domain.ports.NativePushSender;
 import com.calendar.notifications.domain.ports.NotificationRepository;
 import com.calendar.notifications.domain.ports.NotificationWording;
 import com.calendar.notifications.domain.ports.PreferencesRepository;
@@ -34,8 +36,9 @@ public class NotificationsApplicationConfig {
 
     @Bean
     public PushService pushService(SubscriptionRepository subscriptions, PreferencesRepository preferences,
-                                   PushSender sender, DeletedUserMarkers markers, Clock clock) {
-        return new PushService(subscriptions, preferences, sender, markers, clock);
+                                   PushSender sender, ApnsDeviceRepository apnsDevices,
+                                   NativePushSender nativeSender, DeletedUserMarkers markers, Clock clock) {
+        return new PushService(subscriptions, preferences, sender, apnsDevices, nativeSender, markers, clock);
     }
 
     @Bean
@@ -53,9 +56,10 @@ public class NotificationsApplicationConfig {
     @Bean
     public AccountErasureService accountErasureService(DeletedUserMarkers markers, NotificationRepository notifications,
                                                        SubscriptionRepository subscriptions,
+                                                       ApnsDeviceRepository apnsDevices,
                                                        PreferencesRepository preferences, LiveNotifications live,
                                                        NotificationService notificationService, Clock clock) {
-        return new AccountErasureService(markers, notifications, subscriptions, preferences, live,
+        return new AccountErasureService(markers, notifications, subscriptions, apnsDevices, preferences, live,
                 notificationService, clock);
     }
 

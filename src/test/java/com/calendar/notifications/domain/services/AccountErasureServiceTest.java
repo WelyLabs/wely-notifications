@@ -1,5 +1,6 @@
 package com.calendar.notifications.domain.services;
 
+import com.calendar.notifications.domain.ports.ApnsDeviceRepository;
 import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.LiveNotifications;
 import com.calendar.notifications.domain.ports.NotificationRepository;
@@ -43,6 +44,8 @@ class AccountErasureServiceTest {
     @Mock
     private SubscriptionRepository subscriptions;
     @Mock
+    private ApnsDeviceRepository apnsDevices;
+    @Mock
     private PreferencesRepository preferences;
     @Mock
     private LiveNotifications live;
@@ -53,13 +56,14 @@ class AccountErasureServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new AccountErasureService(markers, notifications, subscriptions, preferences, live,
+        service = new AccountErasureService(markers, notifications, subscriptions, apnsDevices, preferences, live,
                 notificationService, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     private void everyStepSucceeds(Set<String> recipientsOfActor) {
         when(markers.markDeleted(any(), any())).thenReturn(Mono.empty());
         when(subscriptions.deleteByUser("lea")).thenReturn(Mono.empty());
+        when(apnsDevices.deleteByUser("lea")).thenReturn(Mono.empty());
         when(preferences.delete("lea")).thenReturn(Mono.empty());
         when(notifications.deleteByRecipient("lea")).thenReturn(Mono.just(3L));
         when(notifications.deleteByActor("lea")).thenReturn(Mono.just(recipientsOfActor));
@@ -67,16 +71,17 @@ class AccountErasureServiceTest {
     }
 
     @Test
-    @DisplayName("the marker comes first, then the stream closes, then devices, preferences and notifications go, then erasedAt")
+    @DisplayName("the marker comes first, then the stream closes, then browsers, iOS devices, preferences and notifications go, then erasedAt")
     void erase_shouldMarkFirstThenCloseTheStreamThenDeleteDevicesPreferencesAndNotificationsThenStampErasedAt() {
         everyStepSucceeds(Set.of());
 
         StepVerifier.create(service.erase("lea", DELETED_AT)).verifyComplete();
 
-        InOrder order = inOrder(markers, live, subscriptions, preferences, notifications);
+        InOrder order = inOrder(markers, live, subscriptions, apnsDevices, preferences, notifications);
         order.verify(markers).markDeleted("lea", DELETED_AT);
         order.verify(live).close("lea");
         order.verify(subscriptions).deleteByUser("lea");
+        order.verify(apnsDevices).deleteByUser("lea");
         order.verify(preferences).delete("lea");
         order.verify(notifications).deleteByRecipient("lea");
         order.verify(notifications).deleteByActor("lea");
@@ -134,6 +139,7 @@ class AccountErasureServiceTest {
     void erase_shouldNotStampErasedAt_whenAStepFails() {
         when(markers.markDeleted(any(), any())).thenReturn(Mono.empty());
         when(subscriptions.deleteByUser("lea")).thenReturn(Mono.empty());
+        when(apnsDevices.deleteByUser("lea")).thenReturn(Mono.empty());
         when(preferences.delete("lea"))
                 .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
 
@@ -145,6 +151,20 @@ class AccountErasureServiceTest {
     }
 
     @Test
+    @DisplayName("iOS devices that cannot be deleted fail the erasure before preferences and notifications go")
+    void erase_shouldStopBeforePreferences_whenTheIosDevicesCannotBeDeleted() {
+        when(markers.markDeleted(any(), any())).thenReturn(Mono.empty());
+        when(subscriptions.deleteByUser("lea")).thenReturn(Mono.empty());
+        when(apnsDevices.deleteByUser("lea"))
+                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+
+        StepVerifier.create(service.erase("lea", DELETED_AT)).expectError(NotificationsException.class).verify();
+
+        verify(preferences, never()).delete(any());
+        verify(markers, never()).markErased(any(), any());
+    }
+
+    @Test
     @DisplayName("a marker that cannot be written fails the erasure before anything is closed or deleted")
     void erase_shouldDeleteNothing_whenTheMarkerCannotBeWritten() {
         when(markers.markDeleted("lea", DELETED_AT))
@@ -152,7 +172,7 @@ class AccountErasureServiceTest {
 
         StepVerifier.create(service.erase("lea", DELETED_AT)).expectError(NotificationsException.class).verify();
 
-        verifyNoInteractions(live, subscriptions, preferences, notifications, notificationService);
+        verifyNoInteractions(live, subscriptions, apnsDevices, preferences, notifications, notificationService);
         verify(markers, never()).markErased(any(), any());
     }
 
@@ -175,6 +195,6 @@ class AccountErasureServiceTest {
     void erase_shouldDoNothingUntilSubscribed() {
         service.erase("lea", DELETED_AT);
 
-        verifyNoInteractions(markers, notifications, subscriptions, preferences, live, notificationService);
+        verifyNoInteractions(markers, notifications, subscriptions, apnsDevices, preferences, live, notificationService);
     }
 }

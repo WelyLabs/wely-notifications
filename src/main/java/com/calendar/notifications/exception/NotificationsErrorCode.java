@@ -17,6 +17,12 @@ public enum NotificationsErrorCode {
             "This account has been deleted.",
             HttpStatus.GONE),
 
+    APNS_DEVICE_INVALID(
+            "NTF-VAL-002",
+            "APNs device invalid",
+            "The token must be the device's APNs token in hex, 64 to 200 characters, and environment SANDBOX or PRODUCTION.",
+            HttpStatus.BAD_REQUEST),
+
     STORE_UNAVAILABLE(
             "NTF-TEC-001",
             "Notification store unavailable",

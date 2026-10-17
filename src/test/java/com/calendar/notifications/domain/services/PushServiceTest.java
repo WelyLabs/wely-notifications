@@ -1,5 +1,7 @@
 package com.calendar.notifications.domain.services;
 
+import com.calendar.notifications.domain.models.ApnsDevice;
+import com.calendar.notifications.domain.models.ApnsEnvironment;
 import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.models.NotificationCategory;
 import com.calendar.notifications.domain.models.NotificationPreferences;
@@ -7,7 +9,9 @@ import com.calendar.notifications.domain.models.NotificationType;
 import com.calendar.notifications.domain.models.PushMessage;
 import com.calendar.notifications.domain.models.PushResult;
 import com.calendar.notifications.domain.models.PushSubscription;
+import com.calendar.notifications.domain.ports.ApnsDeviceRepository;
 import com.calendar.notifications.domain.ports.DeletedUserMarkers;
+import com.calendar.notifications.domain.ports.NativePushSender;
 import com.calendar.notifications.domain.ports.PreferencesRepository;
 import com.calendar.notifications.domain.ports.PushSender;
 import com.calendar.notifications.domain.ports.SubscriptionRepository;
@@ -46,6 +50,7 @@ class PushServiceTest {
     private static final String P256DH =
             "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4";
     private static final String AUTH = "BTBZMqHH6r4Tts7J_aSIgg";
+    private static final String TOKEN = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
 
     @Mock
     private SubscriptionRepository subscriptions;
@@ -54,13 +59,18 @@ class PushServiceTest {
     @Mock
     private PushSender sender;
     @Mock
+    private ApnsDeviceRepository apnsDevices;
+    @Mock
+    private NativePushSender nativeSender;
+    @Mock
     private DeletedUserMarkers markers;
 
     private PushService service;
 
     @BeforeEach
     void setUp() {
-        service = new PushService(subscriptions, preferences, sender, markers, Clock.fixed(NOW, ZoneOffset.UTC));
+        service = new PushService(subscriptions, preferences, sender, apnsDevices, nativeSender, markers,
+                Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     private static boolean accountDeleted(Throwable error) {
@@ -70,6 +80,10 @@ class PushServiceTest {
 
     private static PushSubscription device(String endpoint) {
         return new PushSubscription("bob", endpoint, P256DH, AUTH, null, NOW);
+    }
+
+    private static ApnsDevice iphone(String token) {
+        return new ApnsDevice("bob", token, ApnsEnvironment.PRODUCTION, NOW);
     }
 
     private static Notification message() {
@@ -275,7 +289,7 @@ class PushServiceTest {
 
         StepVerifier.create(service.deliver(message())).verifyComplete();
 
-        verifyNoInteractions(subscriptions, preferences);
+        verifyNoInteractions(subscriptions, preferences, apnsDevices);
     }
 
     @Test
@@ -300,5 +314,188 @@ class PushServiceTest {
                 .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
 
         StepVerifier.create(service.deliver(message())).verifyComplete();
+    }
+
+    @Test
+    @DisplayName("an iOS device is saved for the caller, at the current time, whoever the request named")
+    void registerDevice_shouldSaveTheDeviceForTheCaller() {
+        when(markers.anyDeleted(List.of("bob"))).thenReturn(Mono.just(false));
+        when(apnsDevices.save(any())).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.registerDevice("bob",
+                new ApnsDevice("mallory", TOKEN.toUpperCase(), ApnsEnvironment.SANDBOX, null))).verifyComplete();
+
+        verify(apnsDevices).save(new ApnsDevice("bob", TOKEN, ApnsEnvironment.SANDBOX, NOW));
+        verify(apnsDevices, never()).deleteOwned(any(), any());
+    }
+
+    @Test
+    @DisplayName("a deleted account cannot register an iOS device: 410 NTF-BUS-002, nothing saved")
+    void registerDevice_shouldRefuseAnErasedAccount_withoutSaving() {
+        when(markers.anyDeleted(List.of("bob"))).thenReturn(Mono.just(true));
+
+        StepVerifier.create(service.registerDevice("bob", iphone(TOKEN)))
+                .expectErrorMatches(PushServiceTest::accountDeleted)
+                .verify();
+
+        verifyNoInteractions(apnsDevices);
+    }
+
+    @Test
+    @DisplayName("an account deleted while its iOS device was saved: the device is removed again, 410 NTF-BUS-002")
+    void registerDevice_shouldRemoveTheSavedDevice_whenTheAccountIsDeletedMeanwhile() {
+        when(markers.anyDeleted(List.of("bob"))).thenReturn(Mono.just(false), Mono.just(true));
+        when(apnsDevices.save(any())).thenReturn(Mono.empty());
+        when(apnsDevices.deleteOwned("bob", TOKEN)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.registerDevice("bob", iphone(TOKEN)))
+                .expectErrorMatches(PushServiceTest::accountDeleted)
+                .verify();
+
+        InOrder order = inOrder(apnsDevices);
+        order.verify(apnsDevices).save(any());
+        order.verify(apnsDevices).deleteOwned("bob", TOKEN);
+    }
+
+    @Test
+    @DisplayName("a token APNs would refuse answers 400 NTF-VAL-002, before anything is read or written")
+    void registerDevice_shouldRejectAMalformedToken() {
+        StepVerifier.create(service.registerDevice("bob", iphone("not-hex")))
+                .expectErrorSatisfies(error -> assertThat(((NotificationsException) error).getErrorCode())
+                        .isEqualTo(NotificationsErrorCode.APNS_DEVICE_INVALID))
+                .verify();
+
+        verifyNoInteractions(apnsDevices, markers);
+    }
+
+    @Test
+    @DisplayName("a store failure while saving the iOS device is reported, not swallowed")
+    void registerDevice_shouldFail_whenTheStoreFails() {
+        when(markers.anyDeleted(List.of("bob"))).thenReturn(Mono.just(false));
+        when(apnsDevices.save(any()))
+                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+
+        StepVerifier.create(service.registerDevice("bob", iphone(TOKEN)))
+                .expectErrorSatisfies(error -> assertThat(((NotificationsException) error).getErrorCode())
+                        .isEqualTo(NotificationsErrorCode.STORE_UNAVAILABLE))
+                .verify();
+    }
+
+    @Test
+    @DisplayName("unregistering removes the iOS device only as the caller's, whatever the token's case")
+    void unregisterDevice_shouldDeleteTheCallersDeviceOnly() {
+        when(apnsDevices.deleteOwned("bob", TOKEN)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.unregisterDevice("bob", TOKEN.toUpperCase())).verifyComplete();
+
+        verify(apnsDevices).deleteOwned("bob", TOKEN);
+    }
+
+    @Test
+    @DisplayName("with APNs on and Web Push off, the iOS devices still receive the push")
+    void deliver_shouldPushToIosDevices_whenOnlyApnsIsEnabled() {
+        when(sender.enabled()).thenReturn(false);
+        when(nativeSender.enabled()).thenReturn(true);
+        when(preferences.find("bob")).thenReturn(Mono.empty());
+        when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(iphone(TOKEN)));
+        when(nativeSender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
+
+        StepVerifier.create(service.deliver(message())).verifyComplete();
+
+        verify(nativeSender).send(iphone(TOKEN), PushMessage.of(message()));
+        verifyNoInteractions(subscriptions);
+        verify(sender, never()).send(any(), any());
+    }
+
+    @Test
+    @DisplayName("with both channels on, browsers and iOS devices each receive the push")
+    void deliver_shouldPushToBothChannels() {
+        when(sender.enabled()).thenReturn(true);
+        when(nativeSender.enabled()).thenReturn(true);
+        when(preferences.find("bob")).thenReturn(Mono.empty());
+        when(subscriptions.findByUser("bob")).thenReturn(Flux.just(device("https://a/1")));
+        when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(iphone(TOKEN)));
+        when(sender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
+        when(nativeSender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
+
+        StepVerifier.create(service.deliver(message())).verifyComplete();
+
+        verify(sender).send(eq(device("https://a/1")), any());
+        verify(nativeSender).send(eq(iphone(TOKEN)), any());
+        verify(apnsDevices, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("an iOS device APNs says is gone is forgotten")
+    void deliver_shouldForgetAGoneIosDevice() {
+        when(nativeSender.enabled()).thenReturn(true);
+        when(preferences.find("bob")).thenReturn(Mono.empty());
+        when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(iphone(TOKEN)));
+        when(nativeSender.send(any(), any())).thenReturn(Mono.just(PushResult.GONE));
+        when(apnsDevices.delete(TOKEN)).thenReturn(Mono.empty());
+
+        StepVerifier.create(service.deliver(message())).verifyComplete();
+
+        verify(apnsDevices).delete(TOKEN);
+    }
+
+    @Test
+    @DisplayName("a category switched off reaches no iOS device either")
+    void deliver_shouldSkipIosDevices_whenTheCategoryIsOff() {
+        when(nativeSender.enabled()).thenReturn(true);
+        when(preferences.find("bob")).thenReturn(Mono.just(
+                new NotificationPreferences("bob", Map.of(NotificationCategory.MESSAGES, false))));
+
+        StepVerifier.create(service.deliver(message())).verifyComplete();
+
+        verifyNoInteractions(apnsDevices);
+        verify(nativeSender, never()).send(any(), any());
+    }
+
+    @Test
+    @DisplayName("iOS devices that cannot be read do not stop the browsers' push")
+    void deliver_shouldStillPushToBrowsers_whenTheIosDevicesCannotBeRead() {
+        when(sender.enabled()).thenReturn(true);
+        when(nativeSender.enabled()).thenReturn(true);
+        when(preferences.find("bob")).thenReturn(Mono.empty());
+        when(apnsDevices.findByUser("bob"))
+                .thenReturn(Flux.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+        when(subscriptions.findByUser("bob")).thenReturn(Flux.just(device("https://a/1")));
+        when(sender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
+
+        StepVerifier.create(service.deliver(message())).verifyComplete();
+
+        verify(sender).send(eq(device("https://a/1")), any());
+    }
+
+    @Test
+    @DisplayName("browsers that cannot be read do not stop the iOS devices' push")
+    void deliver_shouldStillPushToIosDevices_whenTheBrowsersCannotBeRead() {
+        when(sender.enabled()).thenReturn(true);
+        when(nativeSender.enabled()).thenReturn(true);
+        when(preferences.find("bob")).thenReturn(Mono.empty());
+        when(subscriptions.findByUser("bob"))
+                .thenReturn(Flux.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+        when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(iphone(TOKEN)));
+        when(nativeSender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
+
+        StepVerifier.create(service.deliver(message())).verifyComplete();
+
+        verify(nativeSender).send(eq(iphone(TOKEN)), any());
+    }
+
+    @Test
+    @DisplayName("one iOS device failing does not stop the others")
+    void deliver_shouldSwallowAnIosDeviceFailure() {
+        String other = TOKEN.replace('a', 'b');
+        when(nativeSender.enabled()).thenReturn(true);
+        when(preferences.find("bob")).thenReturn(Mono.empty());
+        when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(iphone(TOKEN), iphone(other)));
+        when(nativeSender.send(eq(iphone(TOKEN)), any())).thenReturn(Mono.error(new IllegalStateException("boom")));
+        when(nativeSender.send(eq(iphone(other)), any())).thenReturn(Mono.just(PushResult.DELIVERED));
+
+        StepVerifier.create(service.deliver(message())).verifyComplete();
+
+        verify(nativeSender).send(eq(iphone(other)), any());
     }
 }

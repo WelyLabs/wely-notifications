@@ -14,6 +14,7 @@ import java.security.spec.ECParameterSpec;
 import java.security.spec.ECPoint;
 import java.security.spec.ECPrivateKeySpec;
 import java.security.spec.ECPublicKeySpec;
+import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.Arrays;
 
 /** P-256 keys in the raw forms Web Push uses: a 65-byte uncompressed point, a 32-byte scalar. */
@@ -54,6 +55,19 @@ public final class P256 {
         } catch (GeneralSecurityException invalid) {
             throw new IllegalArgumentException("Not a P-256 private key", invalid);
         }
+    }
+
+    /** A PKCS#8 DER private key, as in an APNs .p8 file, refused unless it is on P-256. */
+    public static ECPrivateKey pkcs8PrivateKey(byte[] der) {
+        try {
+            if (KeyFactory.getInstance("EC").generatePrivate(new PKCS8EncodedKeySpec(der)) instanceof ECPrivateKey key
+                    && key.getParams().getOrder().equals(SPEC.getOrder())) {
+                return key;
+            }
+        } catch (GeneralSecurityException invalid) {
+            throw new IllegalArgumentException("Not a PKCS#8 EC private key", invalid);
+        }
+        throw new IllegalArgumentException("Not a P-256 private key");
     }
 
     /** The key as 0x04 || X || Y, each coordinate left-padded to 32 bytes. */

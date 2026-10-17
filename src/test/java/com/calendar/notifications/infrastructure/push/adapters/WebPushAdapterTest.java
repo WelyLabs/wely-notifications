@@ -87,7 +87,7 @@ class WebPushAdapterTest {
     }
 
     private WebPushAdapter adapter(PushProperties.Vapid keys, Duration timeout) {
-        return new WebPushAdapter(new PushProperties(keys, timeout), client, Mappers.getMapper(PushPayloadMapper.class),
+        return new WebPushAdapter(new PushProperties(keys, null, timeout), client, Mappers.getMapper(PushPayloadMapper.class),
                 objectMapper, Clock.systemUTC());
     }
 

@@ -1,9 +1,11 @@
 package com.calendar.notifications.configuration;
 
+import com.calendar.notifications.domain.ports.ApnsDeviceRepository;
 import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.DeletedUsersSource;
 import com.calendar.notifications.domain.ports.EventMembers;
 import com.calendar.notifications.domain.ports.LiveNotifications;
+import com.calendar.notifications.domain.ports.NativePushSender;
 import com.calendar.notifications.domain.ports.NotificationRepository;
 import com.calendar.notifications.domain.ports.NotificationWording;
 import com.calendar.notifications.domain.ports.PreferencesRepository;
@@ -39,26 +41,30 @@ class NotificationsApplicationConfigTest {
         SubscriptionRepository subscriptions = mock(SubscriptionRepository.class);
         PreferencesRepository preferences = mock(PreferencesRepository.class);
         PushSender sender = mock(PushSender.class);
+        ApnsDeviceRepository apnsDevices = mock(ApnsDeviceRepository.class);
+        NativePushSender nativeSender = mock(NativePushSender.class);
         NotificationRepository repository = mock(NotificationRepository.class);
         LiveNotifications live = mock(LiveNotifications.class);
         EventMembers eventMembers = mock(EventMembers.class);
         DeletedUserMarkers markers = mock(DeletedUserMarkers.class);
         Clock clock = Clock.systemUTC();
 
-        PushService pushService = config.pushService(subscriptions, preferences, sender, markers, clock);
+        PushService pushService = config.pushService(subscriptions, preferences, sender, apnsDevices, nativeSender,
+                markers, clock);
         NotificationService notificationService = config.notificationService(repository, live, pushService,
                 mock(NotificationWording.class), markers, clock);
 
         assertThat(pushService).isNotNull();
         assertThat(notificationService).isNotNull();
         assertThat(config.eventMembershipService(eventMembers)).isNotNull();
-        AccountErasureService erasure = config.accountErasureService(markers, repository, subscriptions, preferences,
-                live, notificationService, clock);
+        AccountErasureService erasure = config.accountErasureService(markers, repository, subscriptions, apnsDevices,
+                preferences, live, notificationService, clock);
         DeletedUsersSource source = mock(DeletedUsersSource.class);
 
         assertThat(erasure).isNotNull();
         assertThat(config.accountReconciliationService(source, markers, erasure, clock, Duration.ofHours(48), 500))
                 .isNotNull();
-        verifyNoInteractions(subscriptions, preferences, sender, repository, live, eventMembers, markers, source);
+        verifyNoInteractions(subscriptions, preferences, sender, apnsDevices, nativeSender, repository, live,
+                eventMembers, markers, source);
     }
 }

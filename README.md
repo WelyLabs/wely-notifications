@@ -14,13 +14,13 @@ Il écoute ce qui se passe ailleurs — un appel qui sonne, un message, la date 
 | **Préfixe HTTP** | `/notifications-service` (la gateway route `/api/v1/notifications-service/**`) |
 | **Persistance** | MongoDB `notifications_db` |
 | **Inputs** | Kafka: `CALL_EVENTS`, `MESSAGE_BROADCAST`, `EVENT_GROUP_CHANGED`, `EVENT_DATE_FIXED`, `FRIENDSHIP_CHANGED`, `USER_DELETED` |
-| **Sorties** | REST, flux SSE, Web Push (RFC 8030/8291/8292) |
+| **Sorties** | REST, flux SSE, Web Push (RFC 8030/8291/8292), native iOS push (APNs, off until a key is configured) |
 
 ---
 
 ## Stack
 
-Java 25 · Spring Boot 4 · WebFlux · Spring Cloud Stream (Kafka) · MongoDB réactif · Spring Security (JWT Keycloak) · MapStruct · springdoc · JDK seule pour la cryptographie Web Push
+Java 25 · Spring Boot 4 · WebFlux · Spring Cloud Stream (Kafka) · MongoDB réactif · Spring Security (JWT Keycloak) · MapStruct · springdoc · JDK seule pour la cryptographie Web Push et APNs · Reactor Netty HTTP/2 pour APNs
 
 ---
 
@@ -45,10 +45,12 @@ graph LR
 
     K -->|"groupe partagé<br/>notifications-service-group"| N["wely-notifications :8087"]
 
-    N --> DB[("MongoDB<br/>notifications · push_subscriptions<br/>notification_preferences · event_members<br/>deleted_users")]
+    N --> DB[("MongoDB<br/>notifications · push_subscriptions · apns_devices<br/>notification_preferences · event_members<br/>deleted_users")]
     N -->|"SSE /notifications/stream"| WEB["onglets ouverts"]
     N -->|"Web Push chiffré + VAPID"| PS["service push du navigateur<br/>(FCM, Mozilla, Apple)"]
     PS --> SW["service worker<br/>appareil fermé"]
+    N -.->|"HTTP/2 + provider token<br/>(off without a key)"| APNS["APNs"]
+    APNS -.-> IOS["wely-ios"]
 ```
 
 ```
@@ -74,6 +76,9 @@ graph LR
             │ persistence (Mongo) │  │ realtime (Sinks)     │  │ WebPushAdapter        │
             └─────────────────────┘  └──────────────────────┘  │ WebPushEncryption     │
                                                                │ VapidSigner · P256    │
+                                                               │ ApnsAdapter           │
+                                                               │ ApnsTokenProvider     │
+                                                               │ Es256                 │
                                                                └───────────────────────┘
 ```
 
@@ -82,9 +87,10 @@ graph LR
 0. drops the notification when its recipient or its actor is a **deleted account** (see [Account deletion](#account-deletion));
 1. enregistre la notification, ou la **regroupe** avec la notification non lue de la même conversation ;
 2. la pousse sur le flux SSE de son destinataire, suivie du nouveau compteur de non-lus ;
-3. l'envoie en Web Push à chacun de ses appareils, si la catégorie est activée dans ses préférences.
+3. l'envoie en Web Push à chacun de ses appareils, si la catégorie est activée dans ses préférences ;
+4. sends it through APNs to each of the recipient's iOS devices, under the same preference. Each channel is skipped on its own when it is not configured, and a failure on one never stops the other.
 
-Un échec de push est journalisé et n'empêche jamais l'enregistrement. Un appareil auquel le service push répond **404 ou 410** est oublié.
+Un échec de push est journalisé et n'empêche jamais l'enregistrement. Un appareil auquel le service push répond **404 ou 410** est oublié ; an iOS device APNs answers **410**, or **400** `BadDeviceToken` / `Unregistered`, is forgotten too.
 
 ### Regroupement des messages
 
@@ -107,6 +113,8 @@ Toutes les routes exigent un JWT ; l'utilisateur est **toujours** le claim `busi
 | `GET` | `/push/public-key` | — | **200** `{ "publicKey" }`, vide si le push n'est pas configuré |
 | `PUT` | `/push/subscriptions` | `{ "endpoint", "keys": { "p256dh", "auth" }, "label"? }` | **204**; same endpoint → replaced and moved to the caller; deleted account → **410** `NTF-BUS-002` |
 | `DELETE` | `/push/subscriptions?endpoint=…` | — | **204** ; n'efface que l'appareil de l'appelant |
+| `PUT` | `/push/apns-devices` | `{ "token": "<hex>", "environment": "SANDBOX" \| "PRODUCTION" }` | **204**; same token → replaced and moved to the caller; bad body → **400** `NTF-VAL-001`; token not hex 64–200 → **400** `NTF-VAL-002`; deleted account → **410** `NTF-BUS-002` |
+| `DELETE` | `/push/apns-devices?token=<hex>` | — | **204**; only removes the caller's own device |
 | `GET` | `/preferences` | — | **200** `{ "calls", "messages", "events", "friends" }` |
 | `PUT` | `/preferences` | the four booleans | **200**, echoing what was saved; deleted account → **410** `NTF-BUS-002` |
 
@@ -193,6 +201,30 @@ L'appel manqué porte **le même tag** que l'appel entrant : sur l'appareil, il 
 
 ---
 
+## Native iOS push (APNs)
+
+`wely-ios` (bundle id `com.welylabs.wely`) registers the device token it receives from `registerForRemoteNotifications()` with `PUT /push/apns-devices`, as lowercase or uppercase hex (stored lowercase), with `SANDBOX` for a development build and `PRODUCTION` for TestFlight and the App Store. The token is a capability to push to someone's phone: it is never logged.
+
+**Off by default.** Without `APNS_TEAM_ID`, `APNS_KEY_ID` and `APNS_PRIVATE_KEY`, APNs is off: one warning at startup, registrations are still stored, nothing is sent, and Web Push and the notification center work as before. A malformed key also turns APNs off instead of failing the start. Turning it on needs a **paid Apple Developer account** and an **APNs auth key (.p8)** created under *Certificates, Identifiers & Profiles → Keys*; the key works for both environments.
+
+What is sent, with the JDK and Reactor Netty alone:
+
+- **Provider token**: an ES256 JWT, header `{alg: ES256, kid: <key id>}`, claims `{iss: <team id>, iat}`, signed with the .p8 key (PKCS#8 P-256, the same DER → JOSE conversion as VAPID). It is reused for 50 minutes: Apple refuses a token older than an hour and one refreshed more often than every 20 minutes.
+- **Request**: `POST https://api.push.apple.com/3/device/<token>` (`api.sandbox.push.apple.com` for `SANDBOX`) over **HTTP/2** and TLS, within `app.push.timeout`. Headers `authorization: bearer <jwt>`, `apns-topic: <bundle id>`, `apns-push-type: alert`, `apns-priority: 10` for calls and `5` otherwise, `apns-expiration` = now + the message's TTL (30 s for a call, 24 h otherwise), `apns-collapse-id` = the tag, cut to 64 bytes.
+- **Body**:
+
+```json
+{ "aps": { "alert": { "title": "Appel vidéo", "body": "On t'appelle sur Wely" }, "sound": "default",
+           "thread-id": "call-<id>", "interruption-level": "time-sensitive" },
+  "link": "/call/<id>", "type": "CALL_INCOMING" }
+```
+
+`interruption-level` is `time-sensitive` for calls (the app needs the *Time Sensitive Notifications* capability for it to break through Focus) and `active` otherwise. `link` and `type` are the same as in Web Push.
+
+`ApnsAdapterTest` checks every header and the body against a stub exchange, and verifies the token's signature with the key pair's public half; `ApnsTokenProviderTest` checks the 50-minute cache.
+
+---
+
 ## Événements consommés
 
 Un seul groupe, **partagé** par toutes les répliques : `notifications-service-group`, démarrant au dernier offset pour un groupe nouveau — un premier déploiement ne rejoue pas l'historique. Les enregistrements arrivent en **octets** et sont lus un par un dans un `concatMap` : un enregistrement illisible ou un échec d'écriture est journalisé et abandonné seul, sans arrêter le flux (même modèle que les consommateurs de `wely-chat`).
@@ -221,7 +253,7 @@ When `wely-users` deletes an account, it publishes `USER_DELETED`. This service 
 
 1. **marker** `deleted_users` `{_id: businessId, deletedAt, erasedAt}`, inserted if absent (the first `deletedAt` wins): every guard below is live before anything is deleted;
 2. **closing the user's SSE streams**, in every tab;
-3. **devices** (`push_subscriptions`), first: nothing can be pushed while the rest is deleted;
+3. **devices** (`push_subscriptions`, then `apns_devices`), first: nothing can be pushed while the rest is deleted;
 4. **preferences** (`notification_preferences`);
 5. **their own center**: the notifications they are the recipient of;
 6. **the notifications they caused** for others (`actorId`, indexed): messages, calls, friend requests, event dates. Each affected recipient is sent their new unread count live;
@@ -244,7 +276,7 @@ A failure is retried five times with a growing delay (1 s, up to 30 s), then log
 
 | Copy | Lifetime |
 |---|---|
-| Messages already handed to the push services (FCM, Mozilla, Apple) | 24 h at most (30 s for a call) |
+| Messages already handed to the push services (FCM, Mozilla, Apple, APNs) | 24 h at most (30 s for a call) |
 | Notifications already shown by the device's system | until the user dismisses them |
 | Kafka records of the consumed topics | each topic's retention, set in `wely-gitops-infra` |
 | Pod logs (`businessId`) | until the logs rotate |
@@ -260,6 +292,7 @@ A failure is retried five times with a growing delay (1 s, up to 30 s), then log
 | `NTF-TEC-001` | 502 | MongoDB injoignable |
 | `NTF-TEC-002` | 502 | wely-users' list of deleted accounts unreadable or not configured (reconciliation only, never sent to a client) |
 | `NTF-VAL-001` | 400 | Validation du corps JSON, détail par champ |
+| `NTF-VAL-002` | 400 | APNs device token not hex, or not 64 to 200 characters |
 | `NTF-REQ-000` | *repris* | Chemin inconnu, méthode non autorisée, paramètre manquant |
 | `NTF-TEC-000` | 500 | Erreur inattendue |
 
@@ -287,6 +320,10 @@ Toutes les réponses d'erreur sont des `ProblemDetail` (RFC 7807), avec `code` e
 | `VAPID_PUBLIC_KEY` | vide | Point P-256 non compressé (65 octets), base64url |
 | `VAPID_PRIVATE_KEY` | vide | Scalaire P-256 (32 octets), base64url |
 | `VAPID_SUBJECT` | vide | Contact pour les services push, `mailto:…` |
+| `APNS_TEAM_ID` | empty | Apple Developer team id, the provider token's issuer |
+| `APNS_KEY_ID` | empty | Id of the APNs auth key (10 characters) |
+| `APNS_PRIVATE_KEY` | empty | Content of the `.p8` file, PKCS#8 PEM; armor, newlines and escaped `\n` all accepted |
+| `APNS_BUNDLE_ID` | `com.welylabs.wely` | The iOS app, sent as `apns-topic` |
 | `CALL_EVENTS_TOPIC` | `CALL_EVENTS` | Événements d'appel de `wely-chat` |
 | `MESSAGE_BROADCAST_TOPIC` | `MESSAGE_BROADCAST` | Messages de `wely-chat` |
 | `EVENT_GROUP_TOPIC` | `EVENT_GROUP_CHANGED` | Membres des sorties, de `wely-events` |
@@ -299,7 +336,7 @@ Toutes les réponses d'erreur sont des `ProblemDetail` (RFC 7807), avec `code` e
 | `DELETED_USERS_READER_SECRET` | empty | Reader secret of wely-users' deleted-accounts list, sent in `X-Internal-Secret`. Empty: same effect as above |
 | `ACCOUNT_ERASURE_RECONCILIATION_ENABLED` | `true` | `false` stops the reconciliation loop |
 
-**Sans clés VAPID, le push est désactivé** — un avertissement au démarrage, `GET /push/public-key` rend une chaîne vide — mais le centre de notifications et le flux SSE fonctionnent. Une paire de clés malformée désactive aussi le push au lieu d'empêcher le démarrage.
+**Sans clés VAPID, le push est désactivé** — un avertissement au démarrage, `GET /push/public-key` rend une chaîne vide — mais le centre de notifications et le flux SSE fonctionnent. Une paire de clés malformée désactive aussi le push au lieu d'empêcher le démarrage. **Without the three `APNS_*` secrets, native iOS push is off** the same way, independently of Web Push.
 
 Générer une paire de clés :
 

@@ -1,5 +1,6 @@
 package com.calendar.notifications;
 
+import com.calendar.notifications.domain.ports.NativePushSender;
 import com.calendar.notifications.domain.ports.PushSender;
 import com.calendar.notifications.domain.services.NotificationService;
 import com.calendar.notifications.domain.services.PushService;
@@ -36,6 +37,12 @@ class NotificationsApplicationTest {
     @DisplayName("without VAPID keys the service starts with push off")
     void contextLoads_withPushOff_whenNoKeysAreConfigured() {
         assertThat(context.getBean(PushSender.class).enabled()).isFalse();
+    }
+
+    @Test
+    @DisplayName("without an APNs key the service starts with native iOS push off")
+    void contextLoads_withApnsOff_whenNoKeyIsConfigured() {
+        assertThat(context.getBean(NativePushSender.class).enabled()).isFalse();
     }
 
     /** A consumer bean would make the binder dial a broker that is not there in the unit tests. */

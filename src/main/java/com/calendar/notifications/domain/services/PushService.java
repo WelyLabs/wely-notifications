@@ -1,11 +1,14 @@
 package com.calendar.notifications.domain.services;
 
+import com.calendar.notifications.domain.models.ApnsDevice;
 import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.models.NotificationPreferences;
 import com.calendar.notifications.domain.models.PushMessage;
 import com.calendar.notifications.domain.models.PushResult;
 import com.calendar.notifications.domain.models.PushSubscription;
+import com.calendar.notifications.domain.ports.ApnsDeviceRepository;
 import com.calendar.notifications.domain.ports.DeletedUserMarkers;
+import com.calendar.notifications.domain.ports.NativePushSender;
 import com.calendar.notifications.domain.ports.PreferencesRepository;
 import com.calendar.notifications.domain.ports.PushSender;
 import com.calendar.notifications.domain.ports.SubscriptionRepository;
@@ -16,8 +19,9 @@ import reactor.core.publisher.Mono;
 
 import java.time.Clock;
 import java.util.Collections;
+import java.util.Locale;
 
-/** A user's devices and push preferences, and delivery of a notification to those devices. */
+/** A user's devices and push preferences, and delivery of a notification to those devices, Web Push and APNs. */
 public class PushService {
 
     private static final System.Logger LOG = System.getLogger(PushService.class.getName());
@@ -25,14 +29,19 @@ public class PushService {
     private final SubscriptionRepository subscriptions;
     private final PreferencesRepository preferences;
     private final PushSender sender;
+    private final ApnsDeviceRepository apnsDevices;
+    private final NativePushSender nativeSender;
     private final DeletedUserMarkers markers;
     private final Clock clock;
 
     public PushService(SubscriptionRepository subscriptions, PreferencesRepository preferences, PushSender sender,
-                       DeletedUserMarkers markers, Clock clock) {
+                       ApnsDeviceRepository apnsDevices, NativePushSender nativeSender, DeletedUserMarkers markers,
+                       Clock clock) {
         this.subscriptions = subscriptions;
         this.preferences = preferences;
         this.sender = sender;
+        this.apnsDevices = apnsDevices;
+        this.nativeSender = nativeSender;
         this.markers = markers;
         this.clock = clock;
     }
@@ -57,6 +66,22 @@ public class PushService {
         return subscriptions.deleteOwned(userId, endpoint);
     }
 
+    /** Registers the iOS device for the user, or fails with ACCOUNT_DELETED for a deleted account. */
+    public Mono<Void> registerDevice(String userId, ApnsDevice device) {
+        ApnsDevice owned = device.withUserId(userId).withCreatedAt(clock.instant());
+        if (!owned.isWellFormed()) {
+            return Mono.error(new NotificationsException(NotificationsErrorCode.APNS_DEVICE_INVALID));
+        }
+        return refuseIfDeleted(userId)
+                .then(Mono.defer(() -> apnsDevices.save(owned)))
+                .then(undoIfDeleted(userId, Mono.defer(() -> apnsDevices.deleteOwned(userId, owned.token()))));
+    }
+
+    /** Forgets the iOS device, only if it is the user's own. */
+    public Mono<Void> unregisterDevice(String userId, String token) {
+        return apnsDevices.deleteOwned(userId, token == null ? null : token.toLowerCase(Locale.ROOT));
+    }
+
     public Mono<NotificationPreferences> preferences(String userId) {
         return preferences.find(userId).defaultIfEmpty(NotificationPreferences.defaults(userId));
     }
@@ -70,24 +95,25 @@ public class PushService {
     }
 
     /**
-     * Pushes the notification to each of its recipient's devices, if its category is on. Never fails:
-     * a notification stays recorded whatever happens to its push, and an expired device is forgotten.
+     * Pushes the notification to each of its recipient's devices, if its category is on. Each channel,
+     * Web Push and APNs, is skipped on its own when off. Never fails: a notification stays recorded
+     * whatever happens to its push, and an expired device is forgotten.
      */
     public Mono<Void> deliver(Notification notification) {
-        if (!sender.enabled()) {
+        boolean webPush = sender.enabled();
+        boolean apns = nativeSender.enabled();
+        if (!webPush && !apns) {
             return Mono.empty();
         }
         PushMessage message = PushMessage.of(notification);
-        return preferences(notification.recipientId())
+        String recipientId = notification.recipientId();
+        return preferences(recipientId)
                 .filter(chosen -> chosen.allowsPush(notification.category()))
-                .flatMapMany(chosen -> subscriptions.findByUser(notification.recipientId()))
-                .flatMap(device -> send(device, message))
+                .flatMapMany(chosen -> Flux.merge(
+                        webPush ? toBrowsers(notification, message) : Flux.<Void>empty(),
+                        apns ? toIosDevices(notification, message) : Flux.<Void>empty()))
                 .then()
-                .onErrorResume(error -> {
-                    LOG.log(System.Logger.Level.WARNING, "Push skipped for notification {0}: {1}",
-                            notification.id(), error.getMessage());
-                    return Mono.empty();
-                });
+                .onErrorResume(error -> skipped(notification, error));
     }
 
     private Mono<Void> refuseIfDeleted(String userId) {
@@ -104,14 +130,43 @@ public class PushService {
         return new NotificationsException(NotificationsErrorCode.ACCOUNT_DELETED);
     }
 
+    // Each channel swallows its own failure, so a store error on one never cancels the other.
+    private Flux<Void> toBrowsers(Notification notification, PushMessage message) {
+        return subscriptions.findByUser(notification.recipientId())
+                .flatMap(device -> send(device, message))
+                .onErrorResume(error -> skipped(notification, error));
+    }
+
+    private Flux<Void> toIosDevices(Notification notification, PushMessage message) {
+        return apnsDevices.findByUser(notification.recipientId())
+                .flatMap(device -> send(device, message))
+                .onErrorResume(error -> skipped(notification, error));
+    }
+
+    private static Mono<Void> skipped(Notification notification, Throwable error) {
+        LOG.log(System.Logger.Level.WARNING, "Push skipped for notification {0}: {1}",
+                notification.id(), error.getMessage());
+        return Mono.empty();
+    }
+
     private Flux<Void> send(PushSubscription device, PushMessage message) {
         return sender.send(device, message)
                 .filter(PushResult.GONE::equals)
                 .flatMap(gone -> subscriptions.delete(device.endpoint()))
-                .onErrorResume(error -> {
-                    LOG.log(System.Logger.Level.WARNING, "Push to one device failed: {0}", error.getMessage());
-                    return Mono.empty();
-                })
+                .onErrorResume(PushService::deviceFailed)
                 .flux();
+    }
+
+    private Flux<Void> send(ApnsDevice device, PushMessage message) {
+        return nativeSender.send(device, message)
+                .filter(PushResult.GONE::equals)
+                .flatMap(gone -> apnsDevices.delete(device.token()))
+                .onErrorResume(PushService::deviceFailed)
+                .flux();
+    }
+
+    private static Mono<Void> deviceFailed(Throwable error) {
+        LOG.log(System.Logger.Level.WARNING, "Push to one device failed: {0}", error.getMessage());
+        return Mono.empty();
     }
 }

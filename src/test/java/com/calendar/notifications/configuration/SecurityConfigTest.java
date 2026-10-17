@@ -1,5 +1,8 @@
 package com.calendar.notifications.configuration;
 
+import com.calendar.notifications.domain.models.ApnsDevice;
+import com.calendar.notifications.domain.models.ApnsEnvironment;
+import com.calendar.notifications.domain.ports.ApnsDeviceRepository;
 import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.NotificationRepository;
 import com.calendar.notifications.domain.ports.PreferencesRepository;
@@ -38,6 +41,7 @@ class SecurityConfigTest {
     private static final String P256DH =
             "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4";
     private static final String AUTH = "BTBZMqHH6r4Tts7J_aSIgg";
+    private static final String APNS_TOKEN = "ab".repeat(32);
 
     @Autowired
     private ApplicationContext context;
@@ -57,6 +61,9 @@ class SecurityConfigTest {
 
     @MockitoBean
     private DeletedUserMarkers markers;
+
+    @MockitoBean
+    private ApnsDeviceRepository apnsDevices;
 
     @BeforeEach
     void noAccountIsDeleted() {
@@ -81,6 +88,80 @@ class SecurityConfigTest {
         client().get().uri("/notifications-service/notifications/stream").exchange().expectStatus().isUnauthorized();
         client().get().uri("/notifications-service/push/public-key").exchange().expectStatus().isUnauthorized();
         client().get().uri("/notifications-service/preferences").exchange().expectStatus().isUnauthorized();
+        client().put().uri("/notifications-service/push/apns-devices")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"token\":\"" + APNS_TOKEN + "\",\"environment\":\"PRODUCTION\"}")
+                .exchange().expectStatus().isUnauthorized();
+        client().delete().uri("/notifications-service/push/apns-devices?token=" + APNS_TOKEN)
+                .exchange().expectStatus().isUnauthorized();
+    }
+
+    @Test
+    @DisplayName("an iOS device is registered for the token's user and answers 204")
+    void registerApnsDevice_shouldSaveForTheTokensUser() {
+        when(apnsDevices.save(any())).thenReturn(Mono.empty());
+
+        as("bob").put().uri("/notifications-service/push/apns-devices")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"token\":\"" + APNS_TOKEN.toUpperCase() + "\",\"environment\":\"SANDBOX\"}")
+                .exchange()
+                .expectStatus().isNoContent();
+
+        verify(apnsDevices).save(org.mockito.ArgumentMatchers.argThat((ApnsDevice device) ->
+                "bob".equals(device.userId()) && APNS_TOKEN.equals(device.token())
+                        && device.environment() == ApnsEnvironment.SANDBOX && device.createdAt() != null));
+    }
+
+    @Test
+    @DisplayName("an unknown environment or a missing token answers 400 NTF-VAL-001; a non-hex token 400 NTF-VAL-002")
+    void registerApnsDevice_shouldRejectAMalformedRegistration() {
+        as("bob").put().uri("/notifications-service/push/apns-devices")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"token\":\"" + APNS_TOKEN + "\",\"environment\":\"DEVELOPMENT\"}")
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody().jsonPath("$.code").isEqualTo("NTF-VAL-001");
+
+        as("bob").put().uri("/notifications-service/push/apns-devices")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"environment\":\"PRODUCTION\"}")
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody().jsonPath("$.code").isEqualTo("NTF-VAL-001");
+
+        as("bob").put().uri("/notifications-service/push/apns-devices")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"token\":\"not-hex\",\"environment\":\"PRODUCTION\"}")
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody().jsonPath("$.code").isEqualTo("NTF-VAL-002");
+
+        verify(apnsDevices, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("a deleted account cannot register an iOS device: 410 NTF-BUS-002")
+    void registerApnsDevice_shouldAnswer410_whenTheTokensUserIsErased() {
+        when(markers.anyDeleted(List.of("bob"))).thenReturn(Mono.just(true));
+
+        as("bob").put().uri("/notifications-service/push/apns-devices")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"token\":\"" + APNS_TOKEN + "\",\"environment\":\"PRODUCTION\"}")
+                .exchange()
+                .expectStatus().isEqualTo(410)
+                .expectBody().jsonPath("$.code").isEqualTo("NTF-BUS-002");
+    }
+
+    @Test
+    @DisplayName("unregistering an iOS device is scoped to the token's user and answers 204")
+    void unregisterApnsDevice_shouldBeScopedToTheTokensUser() {
+        when(apnsDevices.deleteOwned("bob", APNS_TOKEN)).thenReturn(Mono.empty());
+
+        as("bob").delete().uri("/notifications-service/push/apns-devices?token=" + APNS_TOKEN)
+                .exchange()
+                .expectStatus().isNoContent();
+
+        verify(apnsDevices).deleteOwned("bob", APNS_TOKEN);
     }
 
     @Test

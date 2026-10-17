@@ -12,4 +12,10 @@ class PushClientConfigTest {
     void pushWebClient_shouldBeBuilt() {
         assertThat(new PushClientConfig().pushWebClient()).isNotNull();
     }
+
+    @Test
+    @DisplayName("the APNs client is built, HTTP/2 over TLS")
+    void apnsWebClient_shouldBeBuilt() {
+        assertThat(new PushClientConfig().apnsWebClient()).isNotNull();
+    }
 }
