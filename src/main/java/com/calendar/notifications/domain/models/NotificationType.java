@@ -9,7 +9,11 @@ public enum NotificationType {
     EVENT_DATE_FIXED(NotificationCategory.EVENTS),
     EVENT_MOVED(NotificationCategory.EVENTS),
     FRIEND_REQUEST(NotificationCategory.FRIENDS),
-    FRIEND_ACCEPTED(NotificationCategory.FRIENDS);
+    FRIEND_ACCEPTED(NotificationCategory.FRIENDS),
+    BIRTHDAY_TODAY(NotificationCategory.BIRTHDAYS),
+    FRIEND_BIRTHDAY(NotificationCategory.BIRTHDAYS),
+    BIRTHDAY_SURPRISE_PROPOSAL(NotificationCategory.BIRTHDAYS),
+    BIRTHDAY_SURPRISE_CREATED(NotificationCategory.BIRTHDAYS);
 
     private final NotificationCategory category;
 

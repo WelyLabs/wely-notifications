@@ -17,6 +17,10 @@ class NotificationTypeTest {
         assertThat(NotificationType.EVENT_MOVED.category()).isEqualTo(NotificationCategory.EVENTS);
         assertThat(NotificationType.FRIEND_REQUEST.category()).isEqualTo(NotificationCategory.FRIENDS);
         assertThat(NotificationType.FRIEND_ACCEPTED.category()).isEqualTo(NotificationCategory.FRIENDS);
+        assertThat(NotificationType.BIRTHDAY_TODAY.category()).isEqualTo(NotificationCategory.BIRTHDAYS);
+        assertThat(NotificationType.FRIEND_BIRTHDAY.category()).isEqualTo(NotificationCategory.BIRTHDAYS);
+        assertThat(NotificationType.BIRTHDAY_SURPRISE_PROPOSAL.category()).isEqualTo(NotificationCategory.BIRTHDAYS);
+        assertThat(NotificationType.BIRTHDAY_SURPRISE_CREATED.category()).isEqualTo(NotificationCategory.BIRTHDAYS);
     }
 
     @Test

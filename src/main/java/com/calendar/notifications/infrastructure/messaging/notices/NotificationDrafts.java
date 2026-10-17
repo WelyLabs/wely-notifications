@@ -2,12 +2,14 @@ package com.calendar.notifications.infrastructure.messaging.notices;
 
 import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.models.NotificationType;
+import com.calendar.notifications.infrastructure.messaging.models.BirthdayNoticeDTO;
 import com.calendar.notifications.infrastructure.messaging.models.CallEventBroadcastDTO;
 import com.calendar.notifications.infrastructure.messaging.models.EventDateFixedDTO;
 import com.calendar.notifications.infrastructure.messaging.models.FriendshipChangedDTO;
 import com.calendar.notifications.infrastructure.messaging.models.MessageBroadcastDTO;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
 import java.util.Optional;
 
 /**
@@ -24,6 +26,9 @@ public class NotificationDrafts {
     private static final String VIDEO = "VIDEO";
     private static final String TEXT = "TEXT";
     private static final String NEW = "NEW";
+    private static final String CLOSE = "CLOSE";
+    private static final String INTIMATE = "INTIMATE";
+    private static final String SOMEONE = "Quelqu'un";
 
     private final DateNoticeFormatter dates;
 
@@ -95,6 +100,104 @@ public class NotificationDrafts {
                     "Nouvel ami", name + " a accepté ta demande", link, null, change.fromUserId()));
             default -> Optional.empty();
         };
+    }
+
+    /**
+     * A birthday notice, worded by the recipient's closeness to the honoree. Empty without a recipient,
+     * an honoree, a name or a date, for a type it does not know, and for a surprise told to its honoree.
+     */
+    public Optional<Notification> fromBirthday(BirthdayNoticeDTO notice) {
+        String name = notice.honoreeName();
+        if (notice.recipientId() == null || notice.honoreeId() == null || notice.date() == null
+                || name == null || name.isBlank() || notice.type() == null) {
+            return Optional.empty();
+        }
+        boolean toHonoree = notice.recipientId().equals(notice.honoreeId());
+        if ("BIRTHDAY_TODAY".equals(notice.type())) {
+            return toHonoree
+                    ? Optional.of(birthday(notice, NotificationType.BIRTHDAY_TODAY, "Joyeux anniversaire, " + name + " ! 🎂",
+                            "Toute la bande Wely te souhaite une magnifique journée.",
+                            "/calendar?date=" + notice.date(), null))
+                    : Optional.empty();
+        }
+        // Everything else is about the honoree, and the surprise must stay one.
+        if (toHonoree) {
+            return Optional.empty();
+        }
+        return switch (notice.type()) {
+            case "FRIEND_BIRTHDAY" -> Optional.of(friendBirthday(notice, name));
+            case "SURPRISE_PROPOSAL" -> surpriseProposal(notice, name);
+            case "SURPRISE_CREATED" -> notice.surpriseEventId() == null
+                    ? Optional.empty()
+                    : Optional.of(birthday(notice, NotificationType.BIRTHDAY_SURPRISE_CREATED,
+                            "🤫 " + organizer(notice) + " organise l'anniversaire surprise de " + name,
+                            "Rejoins la fête, " + name + " ne voit rien.",
+                            "/event/" + notice.surpriseEventId(), notice.honoreeId()));
+            default -> Optional.empty();
+        };
+    }
+
+    private static Notification friendBirthday(BirthdayNoticeDTO notice, String name) {
+        String link = "/friends/" + notice.honoreeId();
+        NotificationType type = NotificationType.FRIEND_BIRTHDAY;
+        return switch (notice.closeness() == null ? "" : notice.closeness()) {
+            case INTIMATE -> birthday(notice, type, "🎂 C'est le grand jour de " + name + " !",
+                    "Fais-lui une journée inoubliable.", link, notice.honoreeId());
+            case CLOSE -> birthday(notice, type, "🎉 " + name + " fête son anniversaire aujourd'hui",
+                    "Pense à lui écrire !", link, notice.honoreeId());
+            default -> birthday(notice, type, "C'est l'anniversaire de " + name,
+                    "Un petit mot lui ferait plaisir.", link, notice.honoreeId());
+        };
+    }
+
+    // Without a surprise yet the count of days is the point, so a notice without one is dropped.
+    private static Optional<Notification> surpriseProposal(BirthdayNoticeDTO notice, String name) {
+        NotificationType type = NotificationType.BIRTHDAY_SURPRISE_PROPOSAL;
+        if (notice.surpriseEventId() != null) {
+            return Optional.of(birthday(notice, type, "🤫 " + organizer(notice) + " prépare une surprise pour " + name,
+                    "Rejoins-la, " + name + " n'en saura rien.", "/event/" + notice.surpriseEventId(),
+                    notice.honoreeId()));
+        }
+        if (notice.daysUntil() == null || notice.daysUntil() < 0) {
+            return Optional.empty();
+        }
+        String link = "/calendar?surpriseFor=" + notice.honoreeId() + "&date=" + notice.date();
+        int days = notice.daysUntil();
+        if (INTIMATE.equals(notice.closeness())) {
+            return Optional.of(birthday(notice, type, "🤫 L'anniversaire de " + name + " approche",
+                    capitalize(inDays(days)) + ". Organise une surprise : tout est déjà prêt, il ne reste qu'à créer.",
+                    link, notice.honoreeId()));
+        }
+        return Optional.of(birthday(notice, type, "🎁 " + name + " fête son anniversaire " + inDays(days),
+                "Lance l'anniversaire surprise en un clic.", link, notice.honoreeId()));
+    }
+
+    private static Notification birthday(BirthdayNoticeDTO notice, NotificationType type, String title, String body,
+                                         String link, String actorId) {
+        return Notification.draft(notice.recipientId(), type, title, body, link,
+                groupKey(notice.honoreeId(), notice.date()), actorId);
+    }
+
+    static String groupKey(String honoreeId, LocalDate date) {
+        return "birthday-" + honoreeId + "-" + date.getYear();
+    }
+
+    // "dans 14 jours", but "dans 1 jour", and "aujourd'hui" for a notice sent late.
+    private static String inDays(int days) {
+        return switch (days) {
+            case 0 -> "aujourd'hui";
+            case 1 -> "dans 1 jour";
+            default -> "dans " + days + " jours";
+        };
+    }
+
+    private static String capitalize(String text) {
+        return Character.toUpperCase(text.charAt(0)) + text.substring(1);
+    }
+
+    private static String organizer(BirthdayNoticeDTO notice) {
+        String name = notice.organizerName();
+        return name == null || name.isBlank() ? SOMEONE : name;
     }
 
     private static String excerpt(String content) {

@@ -2,6 +2,7 @@ package com.calendar.notifications.infrastructure.messaging.notices;
 
 import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.models.NotificationType;
+import com.calendar.notifications.infrastructure.messaging.models.BirthdayNoticeDTO;
 import com.calendar.notifications.infrastructure.messaging.models.CallEventBroadcastDTO;
 import com.calendar.notifications.infrastructure.messaging.models.EventDateFixedDTO;
 import com.calendar.notifications.infrastructure.messaging.models.FriendshipChangedDTO;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
 
@@ -189,5 +191,131 @@ class NotificationDraftsTest {
         assertThat(drafts.fromFriendship(new FriendshipChangedDTO(null, "lea", "Léa", "bob"))).isEmpty();
         assertThat(drafts.fromFriendship(new FriendshipChangedDTO("REQUESTED", "lea", "Léa", null))).isEmpty();
         assertThat(drafts.fromFriendship(new FriendshipChangedDTO("REQUESTED", null, "Léa", "bob"))).isEmpty();
+    }
+
+    private static final LocalDate BIRTHDAY = LocalDate.parse("2027-03-12");
+    private static final String KEY = "birthday-lea-2027";
+
+    private static BirthdayNoticeDTO notice(String type, String recipient, Integer daysUntil, String closeness,
+                                            String surpriseEventId, String organizerName) {
+        return new BirthdayNoticeDTO(type, recipient, "lea", "Léa", BIRTHDAY, daysUntil, closeness, surpriseEventId,
+                surpriseEventId == null ? null : "max", organizerName);
+    }
+
+    private static Notification birthday(NotificationType type, String recipient, String title, String body,
+                                         String link, String actor) {
+        return Notification.draft(recipient, type, title, body, link, KEY, actor);
+    }
+
+    @Test
+    @DisplayName("the honoree is wished a happy birthday, linking to the day in the calendar")
+    void fromBirthday_shouldWishTheHonoree() {
+        assertThat(drafts.fromBirthday(notice("BIRTHDAY_TODAY", "lea", 0, null, null, null)))
+                .contains(birthday(NotificationType.BIRTHDAY_TODAY, "lea", "Joyeux anniversaire, Léa ! 🎂",
+                        "Toute la bande Wely te souhaite une magnifique journée.", "/calendar?date=2027-03-12", null));
+    }
+
+    @Test
+    @DisplayName("a birthday wish meant for someone else than the honoree is dropped")
+    void fromBirthday_shouldDropTheWish_whenNotForTheHonoree() {
+        assertThat(drafts.fromBirthday(notice("BIRTHDAY_TODAY", "bob", 0, "FRIEND", null, null))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a friend's birthday is worded by closeness, a missing closeness as a plain friend")
+    void fromBirthday_shouldWordAFriendsBirthdayByCloseness() {
+        assertThat(drafts.fromBirthday(notice("FRIEND_BIRTHDAY", "bob", 0, "FRIEND", null, null)))
+                .contains(birthday(NotificationType.FRIEND_BIRTHDAY, "bob", "C'est l'anniversaire de Léa",
+                        "Un petit mot lui ferait plaisir.", "/friends/lea", "lea"));
+        assertThat(drafts.fromBirthday(notice("FRIEND_BIRTHDAY", "bob", 0, "CLOSE", null, null)))
+                .contains(birthday(NotificationType.FRIEND_BIRTHDAY, "bob", "🎉 Léa fête son anniversaire aujourd'hui",
+                        "Pense à lui écrire !", "/friends/lea", "lea"));
+        assertThat(drafts.fromBirthday(notice("FRIEND_BIRTHDAY", "bob", 0, "INTIMATE", null, null)))
+                .contains(birthday(NotificationType.FRIEND_BIRTHDAY, "bob", "🎂 C'est le grand jour de Léa !",
+                        "Fais-lui une journée inoubliable.", "/friends/lea", "lea"));
+        assertThat(drafts.fromBirthday(notice("FRIEND_BIRTHDAY", "bob", 0, null, null, null)).orElseThrow().title())
+                .isEqualTo("C'est l'anniversaire de Léa");
+    }
+
+    @Test
+    @DisplayName("an intimate friend is offered to organize a surprise, linking to its pre-filled creation")
+    void fromBirthday_shouldProposeASurprise_toAnIntimateFriend() {
+        assertThat(drafts.fromBirthday(notice("SURPRISE_PROPOSAL", "bob", 21, "INTIMATE", null, null)))
+                .contains(birthday(NotificationType.BIRTHDAY_SURPRISE_PROPOSAL, "bob", "🤫 L'anniversaire de Léa approche",
+                        "Dans 21 jours. Organise une surprise : tout est déjà prêt, il ne reste qu'à créer.",
+                        "/calendar?surpriseFor=lea&date=2027-03-12", "lea"));
+    }
+
+    @Test
+    @DisplayName("a close friend is offered a one-click surprise")
+    void fromBirthday_shouldProposeASurprise_toACloseFriend() {
+        assertThat(drafts.fromBirthday(notice("SURPRISE_PROPOSAL", "bob", 14, "CLOSE", null, null)))
+                .contains(birthday(NotificationType.BIRTHDAY_SURPRISE_PROPOSAL, "bob",
+                        "🎁 Léa fête son anniversaire dans 14 jours", "Lance l'anniversaire surprise en un clic.",
+                        "/calendar?surpriseFor=lea&date=2027-03-12", "lea"));
+    }
+
+    @Test
+    @DisplayName("a proposal sent late counts one day, or today, in good French")
+    void fromBirthday_shouldWordOneDayAndToday() {
+        assertThat(drafts.fromBirthday(notice("SURPRISE_PROPOSAL", "bob", 1, "CLOSE", null, null)).orElseThrow().title())
+                .isEqualTo("🎁 Léa fête son anniversaire dans 1 jour");
+        assertThat(drafts.fromBirthday(notice("SURPRISE_PROPOSAL", "bob", 0, "INTIMATE", null, null)).orElseThrow().body())
+                .startsWith("Aujourd'hui. Organise une surprise");
+    }
+
+    @Test
+    @DisplayName("with a surprise already planned, the proposal invites to join it")
+    void fromBirthday_shouldInviteToJoin_whenASurpriseExists() {
+        assertThat(drafts.fromBirthday(notice("SURPRISE_PROPOSAL", "bob", 14, "CLOSE", "s1", "Max")))
+                .contains(birthday(NotificationType.BIRTHDAY_SURPRISE_PROPOSAL, "bob", "🤫 Max prépare une surprise pour Léa",
+                        "Rejoins-la, Léa n'en saura rien.", "/event/s1", "lea"));
+        assertThat(drafts.fromBirthday(notice("SURPRISE_PROPOSAL", "bob", 14, "CLOSE", "s1", " ")).orElseThrow().title())
+                .isEqualTo("🤫 Quelqu'un prépare une surprise pour Léa");
+    }
+
+    @Test
+    @DisplayName("a proposal without a surprise nor a count of days is dropped")
+    void fromBirthday_shouldDropAProposal_withoutDays() {
+        assertThat(drafts.fromBirthday(notice("SURPRISE_PROPOSAL", "bob", null, "CLOSE", null, null))).isEmpty();
+        assertThat(drafts.fromBirthday(notice("SURPRISE_PROPOSAL", "bob", -1, "CLOSE", null, null))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a surprise created is told with its organizer, linking to it")
+    void fromBirthday_shouldTellTheSurpriseCreated() {
+        assertThat(drafts.fromBirthday(notice("SURPRISE_CREATED", "bob", 14, "CLOSE", "s1", "Max")))
+                .contains(birthday(NotificationType.BIRTHDAY_SURPRISE_CREATED, "bob",
+                        "🤫 Max organise l'anniversaire surprise de Léa", "Rejoins la fête, Léa ne voit rien.",
+                        "/event/s1", "lea"));
+        assertThat(drafts.fromBirthday(notice("SURPRISE_CREATED", "bob", 14, "CLOSE", null, "Max"))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("nothing about a surprise ever reaches its honoree")
+    void fromBirthday_shouldNeverTellTheHonoree_aboutTheSurprise() {
+        assertThat(drafts.fromBirthday(notice("SURPRISE_CREATED", "lea", 14, null, "s1", "Max"))).isEmpty();
+        assertThat(drafts.fromBirthday(notice("SURPRISE_PROPOSAL", "lea", 14, null, "s1", "Max"))).isEmpty();
+        assertThat(drafts.fromBirthday(notice("FRIEND_BIRTHDAY", "lea", 0, null, null, null))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("an unknown type or an incomplete notice notifies nobody")
+    void fromBirthday_shouldIgnoreEverythingElse() {
+        assertThat(drafts.fromBirthday(notice("BIRTHDAY_FORGOTTEN", "bob", 0, null, null, null))).isEmpty();
+        assertThat(drafts.fromBirthday(notice(null, "bob", 0, null, null, null))).isEmpty();
+        assertThat(drafts.fromBirthday(notice("FRIEND_BIRTHDAY", null, 0, null, null, null))).isEmpty();
+        assertThat(drafts.fromBirthday(new BirthdayNoticeDTO("FRIEND_BIRTHDAY", "bob", null, "Léa", BIRTHDAY, 0,
+                null, null, null, null))).isEmpty();
+        assertThat(drafts.fromBirthday(new BirthdayNoticeDTO("FRIEND_BIRTHDAY", "bob", "lea", " ", BIRTHDAY, 0,
+                null, null, null, null))).isEmpty();
+        assertThat(drafts.fromBirthday(new BirthdayNoticeDTO("FRIEND_BIRTHDAY", "bob", "lea", "Léa", null, 0,
+                null, null, null, null))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("the group key is the honoree and the occurrence's year")
+    void groupKey_shouldJoinTheHonoreeAndTheYear() {
+        assertThat(NotificationDrafts.groupKey("lea", BIRTHDAY)).isEqualTo(KEY);
     }
 }

@@ -10,6 +10,7 @@ import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.bson.Document;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.test.context.ActiveProfiles;
@@ -62,6 +63,20 @@ class MongoPreferencesRepositoryAdapterIntegrationTest {
         adapter.save(replaced).block();
 
         assertThat(adapter.find("bob").block()).isEqualTo(replaced);
+    }
+
+    @Test
+    @DisplayName("a document saved before birthdays existed reads with birthdays on")
+    void find_shouldPushBirthdays_forADocumentWithoutTheCategory() {
+        mongoTemplate.insert(new Document("_id", "bob").append("push", new Document("CALLS", false)
+                .append("MESSAGES", true).append("EVENTS", true).append("FRIENDS", true)), "notification_preferences")
+                .block();
+
+        NotificationPreferences found = adapter.find("bob").block();
+
+        assertThat(found).isNotNull();
+        assertThat(found.allowsPush(NotificationCategory.CALLS)).isFalse();
+        assertThat(found.allowsPush(NotificationCategory.BIRTHDAYS)).isTrue();
     }
 
     @Test

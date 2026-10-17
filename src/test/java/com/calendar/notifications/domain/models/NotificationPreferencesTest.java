@@ -30,6 +30,15 @@ class NotificationPreferencesTest {
     }
 
     @Test
+    @DisplayName("preferences saved before birthdays existed push birthdays")
+    void allowsPush_shouldPushBirthdays_forPreferencesSavedBeforeTheCategory() {
+        NotificationPreferences older = new NotificationPreferences("u", Map.of(NotificationCategory.CALLS, false,
+                NotificationCategory.MESSAGES, false, NotificationCategory.EVENTS, false, NotificationCategory.FRIENDS, false));
+
+        assertThat(older.allowsPush(NotificationCategory.BIRTHDAYS)).isTrue();
+    }
+
+    @Test
     @DisplayName("no map at all means every category on")
     void constructor_shouldTreatANullMapAsEmpty() {
         assertThat(new NotificationPreferences("u", null).allowsPush(NotificationCategory.FRIENDS)).isTrue();

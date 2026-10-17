@@ -5,5 +5,6 @@ public enum NotificationCategory {
     CALLS,
     MESSAGES,
     EVENTS,
-    FRIENDS
+    FRIENDS,
+    BIRTHDAYS
 }

@@ -42,22 +42,22 @@ class PreferencesControllerTest {
     }
 
     @Test
-    @DisplayName("the caller's preferences are read as four booleans")
+    @DisplayName("the caller's preferences are read as five booleans")
     void get_shouldReadTheCallersPreferences() {
         when(pushService.preferences("bob")).thenReturn(Mono.just(NotificationPreferences.defaults("bob")));
 
-        StepVerifier.create(controller.get(jwt)).expectNext(new PreferencesDTO(true, true, true, true)).verifyComplete();
+        StepVerifier.create(controller.get(jwt)).expectNext(new PreferencesDTO(true, true, true, true, true)).verifyComplete();
     }
 
     @Test
     @DisplayName("the caller's preferences are saved and echoed")
     void update_shouldSaveAndEcho() {
         NotificationPreferences saved = new NotificationPreferences("bob", Map.of(NotificationCategory.CALLS, false,
-                NotificationCategory.MESSAGES, true, NotificationCategory.EVENTS, true, NotificationCategory.FRIENDS, true));
+                NotificationCategory.MESSAGES, true, NotificationCategory.EVENTS, true, NotificationCategory.FRIENDS, true, NotificationCategory.BIRTHDAYS, false));
         when(pushService.updatePreferences(eq("bob"), any())).thenReturn(Mono.just(saved));
 
-        StepVerifier.create(controller.update(jwt, new PreferencesDTO(false, true, true, true)))
-                .expectNext(new PreferencesDTO(false, true, true, true))
+        StepVerifier.create(controller.update(jwt, new PreferencesDTO(false, true, true, true, false)))
+                .expectNext(new PreferencesDTO(false, true, true, true, false))
                 .verifyComplete();
     }
 
@@ -67,7 +67,7 @@ class PreferencesControllerTest {
         when(pushService.updatePreferences(eq("bob"), any()))
                 .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.ACCOUNT_DELETED)));
 
-        StepVerifier.create(controller.update(jwt, new PreferencesDTO(true, true, true, true)))
+        StepVerifier.create(controller.update(jwt, new PreferencesDTO(true, true, true, true, true)))
                 .expectErrorSatisfies(error -> assertThat(((NotificationsException) error).getErrorCode())
                         .isEqualTo(NotificationsErrorCode.ACCOUNT_DELETED))
                 .verify();

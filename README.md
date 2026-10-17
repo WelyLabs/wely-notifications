@@ -13,7 +13,7 @@ Il écoute ce qui se passe ailleurs — un appel qui sonne, un message, la date 
 | **Port** | 8087 |
 | **Préfixe HTTP** | `/notifications-service` (la gateway route `/api/v1/notifications-service/**`) |
 | **Persistance** | MongoDB `notifications_db` |
-| **Inputs** | Kafka: `CALL_EVENTS`, `MESSAGE_BROADCAST`, `EVENT_GROUP_CHANGED`, `EVENT_DATE_FIXED`, `FRIENDSHIP_CHANGED`, `USER_DELETED` |
+| **Inputs** | Kafka: `CALL_EVENTS`, `MESSAGE_BROADCAST`, `EVENT_GROUP_CHANGED`, `EVENT_DATE_FIXED`, `FRIENDSHIP_CHANGED`, `BIRTHDAY_NOTICES`, `USER_DELETED` |
 | **Sorties** | REST, flux SSE, Web Push (RFC 8030/8291/8292), native iOS push (APNs, off until a key is configured) |
 
 ---
@@ -39,7 +39,7 @@ Java 25 · Spring Boot 4 · WebFlux · Spring Cloud Stream (Kafka) · MongoDB r�
 ```mermaid
 graph LR
     CHAT["wely-chat"] -->|"CALL_EVENTS<br/>MESSAGE_BROADCAST"| K{{Kafka}}
-    EVT["wely-events"] -->|"EVENT_GROUP_CHANGED<br/>EVENT_DATE_FIXED"| K
+    EVT["wely-events"] -->|"EVENT_GROUP_CHANGED<br/>EVENT_DATE_FIXED<br/>BIRTHDAY_NOTICES"| K
     SOC["wely-social"] -->|"FRIENDSHIP_CHANGED"| K
     USR["wely-users"] -->|"USER_DELETED"| K
 
@@ -57,7 +57,7 @@ graph LR
                         ┌──────────────────────────────────────────────────────┐
   Kafka (octets) ──────▶│ infrastructure/messaging                             │
                         │   CallEvents · Messages · EventGroups · EventDates   │
-                        │   Friendships consumers  →  NotificationDrafts (FR)  │
+                        │   Friendships · BirthdayNotices → NotificationDrafts │
                         │   UserDeleted consumer   →  AccountErasureService    │
                         └──────────────────────┬───────────────────────────────┘
   REST / SSE ──────────▶ application/rest      │ Notification (brouillon)
@@ -115,8 +115,8 @@ Toutes les routes exigent un JWT ; l'utilisateur est **toujours** le claim `busi
 | `DELETE` | `/push/subscriptions?endpoint=…` | — | **204** ; n'efface que l'appareil de l'appelant |
 | `PUT` | `/push/apns-devices` | `{ "token": "<hex>", "environment": "SANDBOX" \| "PRODUCTION", "kind"?: "ALERT" \| "VOIP" }` (`kind` defaults to `ALERT`) | **204**; same token → replaced and moved to the caller; bad body → **400** `NTF-VAL-001`; token not hex 64–200 → **400** `NTF-VAL-002`; deleted account → **410** `NTF-BUS-002` |
 | `DELETE` | `/push/apns-devices?token=<hex>` | — | **204**; only removes the caller's own device |
-| `GET` | `/preferences` | — | **200** `{ "calls", "messages", "events", "friends" }` |
-| `PUT` | `/preferences` | the four booleans | **200**, echoing what was saved; deleted account → **410** `NTF-BUS-002` |
+| `GET` | `/preferences` | — | **200** `{ "calls", "messages", "events", "friends", "birthdays" }` |
+| `PUT` | `/preferences` | the five booleans (`birthdays` optional: left out, it stays on) | **200**, echoing what was saved; deleted account → **410** `NTF-BUS-002` |
 
 `NotificationDTO` : `{ id, type, category, title, body, link, groupKey, count, actorId, createdAt, readAt }`. `link` est une route de l'application web (`/call/{id}`, `/chat/{id}`, `/event/{id}`, `/friends/{id}`).
 
@@ -147,8 +147,14 @@ The comments are merged with the updates as signals (`materialize` / `dematerial
 | `EVENT_MOVED` | `EVENTS` | `EVENT_DATE_FIXED` avec une date précédente | `/event/{eventId}` |
 | `FRIEND_REQUEST` | `FRIENDS` | `FRIENDSHIP_CHANGED`, `REQUESTED` | `/friends/{fromUserId}` |
 | `FRIEND_ACCEPTED` | `FRIENDS` | `FRIENDSHIP_CHANGED`, `ACCEPTED` | `/friends/{fromUserId}` |
+| `BIRTHDAY_TODAY` | `BIRTHDAYS` | `BIRTHDAY_NOTICES`, `BIRTHDAY_TODAY`, to the honoree only | `/calendar?date=YYYY-MM-DD` |
+| `FRIEND_BIRTHDAY` | `BIRTHDAYS` | `BIRTHDAY_NOTICES`, `FRIEND_BIRTHDAY`, worded by closeness | `/friends/{honoreeId}` |
+| `BIRTHDAY_SURPRISE_PROPOSAL` | `BIRTHDAYS` | `BIRTHDAY_NOTICES`, `SURPRISE_PROPOSAL` | `/calendar?surpriseFor={honoreeId}&date=YYYY-MM-DD`, or `/event/{surpriseEventId}` once a surprise exists |
+| `BIRTHDAY_SURPRISE_CREATED` | `BIRTHDAYS` | `BIRTHDAY_NOTICES`, `SURPRISE_CREATED` | `/event/{surpriseEventId}` |
 
 Le centre de notifications enregistre **toujours** ; seules les préférences de push dépendent de la catégorie. Toutes sont actives par défaut.
+
+Birthday notifications carry the group key `birthday-{honoreeId}-{year}` and the honoree as `actorId`. No surprise notice ever reaches its honoree, even if the record asks for it.
 
 ### OpenAPI
 
@@ -271,12 +277,13 @@ Only `USER_DELETED` starts from the **earliest** offset: a deletion published be
 | `EVENT_GROUP_TOPIC` | `{eventId, title, organizerId, memberIds, version, deleted}` | met à jour la projection versionnée `event_members` ; une version plus ancienne est ignorée, un événement supprimé garde sa version et plus aucun membre |
 | `EVENT_DATE_FIXED_TOPIC` | `{eventId, title, start, end, organizerId, previousStart, previousEnd}` | `EVENT_DATE_FIXED` ou `EVENT_MOVED` à chaque membre sauf l'organisateur, date en français dans `NOTICES_ZONE` ; événement inconnu de la projection → ignoré et journalisé |
 | `FRIENDSHIP_TOPIC` | `{type: REQUESTED\|ACCEPTED, fromUserId, fromUserName, toUserId}` | `FRIEND_REQUEST` ou `FRIEND_ACCEPTED` à `toUserId` |
+| `BIRTHDAY_NOTICES_TOPIC` | `{type, recipientId, honoreeId, honoreeName, date, daysUntil, closeness, surpriseEventId, organizerId, organizerName}` | one birthday notification to `recipientId`, see the types above; unknown type or missing name, date or ids → ignored |
 | `USER_DELETED_TOPIC` | `{userId, deletedAt}` (`deletedAt` missing from older records) | erases the account, see [Account deletion](#account-deletion) |
 
 La projection `event_members` existe parce que `EVENT_DATE_FIXED` ne porte pas la liste des membres.
 A deleted event keeps its version there, with no member **and no title**.
 
-`USER_DELETED` is consumed by a `Function<Flux<Message<byte[]>>, Mono<Void>>`, not a `Consumer`: the binder subscribes to the result itself, with no manual `subscribe()`, and creates no output binding (the integration test asserts it). The other five consumers still subscribe themselves.
+`USER_DELETED` is consumed by a `Function<Flux<Message<byte[]>>, Mono<Void>>`, not a `Consumer`: the binder subscribes to the result itself, with no manual `subscribe()`, and creates no output binding (the integration test asserts it). The other six consumers still subscribe themselves.
 
 ---
 
@@ -362,9 +369,10 @@ Toutes les réponses d'erreur sont des `ProblemDetail` (RFC 7807), avec `code` e
 | `EVENT_GROUP_TOPIC` | `EVENT_GROUP_CHANGED` | Membres des sorties, de `wely-events` |
 | `EVENT_DATE_FIXED_TOPIC` | `EVENT_DATE_FIXED` | Dates fixées ou décalées, de `wely-events` |
 | `FRIENDSHIP_TOPIC` | `FRIENDSHIP_CHANGED` | Demandes d'ami, de `wely-social` |
+| `BIRTHDAY_NOTICES_TOPIC` | `BIRTHDAY_NOTICES` | Birthday reminders and surprises, from `wely-events` |
 | `USER_DELETED_TOPIC` | `USER_DELETED` | Deleted accounts, from `wely-users` |
 | `NOTICES_ZONE` | `Europe/Paris` | Fuseau des dates écrites dans les notifications |
-| `NOTIFICATIONS_CONSUMERS_ENABLED` | `true` | Turns off the six Kafka consumers |
+| `NOTIFICATIONS_CONSUMERS_ENABLED` | `true` | Turns off the seven Kafka consumers |
 | `USERS_API_URL` | empty (`http://localhost:8082` in `dev`) | wely-users' in-cluster URL, read by the reconciliation. Empty: the service starts, each pass fails with `NTF-TEC-002` |
 | `DELETED_USERS_READER_SECRET` | empty | Reader secret of wely-users' deleted-accounts list, sent in `X-Internal-Secret`. Empty: same effect as above |
 | `ACCOUNT_ERASURE_RECONCILIATION_ENABLED` | `true` | `false` stops the reconciliation loop |
