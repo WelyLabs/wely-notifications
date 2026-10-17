@@ -12,6 +12,7 @@ public interface IncomingCallMapper {
 
     @Mapping(target = "callId", source = "id")
     @Mapping(target = "callerId", source = "startedBy")
+    @Mapping(target = "callerName", source = "startedByName")
     @Mapping(target = "media", source = "media", qualifiedByName = "media")
     IncomingCall toIncomingCall(CallEventBroadcastDTO.CallDTO call);
 

@@ -17,15 +17,26 @@ class IncomingCallMapperTest {
     private final IncomingCallMapper mapper = Mappers.getMapper(IncomingCallMapper.class);
 
     private static CallEventBroadcastDTO.CallDTO call(String media) {
-        return new CallEventBroadcastDTO.CallDTO("k1", "conv1", "lea", media, "RINGING", Instant.EPOCH, null,
+        return call(media, null);
+    }
+
+    private static CallEventBroadcastDTO.CallDTO call(String media, String startedByName) {
+        return new CallEventBroadcastDTO.CallDTO("k1", "conv1", "lea", startedByName, media, "RINGING", Instant.EPOCH, null,
                 List.of("lea", "bob"), List.of());
     }
 
     @Test
     @DisplayName("the call's id, caller, media and conversation are kept")
     void toIncomingCall_shouldKeepTheCallFacts() {
-        assertThat(mapper.toIncomingCall(call("VIDEO"))).isEqualTo(new IncomingCall("k1", "lea", CallMedia.VIDEO, "conv1"));
+        assertThat(mapper.toIncomingCall(call("VIDEO"))).isEqualTo(new IncomingCall("k1", "lea", null, CallMedia.VIDEO, "conv1"));
         assertThat(mapper.toIncomingCall(null)).isNull();
+    }
+
+    @Test
+    @DisplayName("the caller's name is kept, and stays null when wely-chat sent none")
+    void toIncomingCall_shouldKeepTheCallerName() {
+        assertThat(mapper.toIncomingCall(call("AUDIO", "Léa")).callerName()).isEqualTo("Léa");
+        assertThat(mapper.toIncomingCall(call("AUDIO")).callerName()).isNull();
     }
 
     @Test

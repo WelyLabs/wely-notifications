@@ -95,7 +95,7 @@ class PushServiceTest {
     }
 
     private static final String VOIP_TOKEN = "f".repeat(64);
-    private static final IncomingCall CALL = new IncomingCall("k1", "lea", CallMedia.VIDEO, "conv1");
+    private static final IncomingCall CALL = new IncomingCall("k1", "lea", null, CallMedia.VIDEO, "conv1");
 
     private static Notification ringing() {
         return new Notification("n1", "bob", NotificationType.CALL_INCOMING, "Appel vidéo", "On t'appelle sur Wely",

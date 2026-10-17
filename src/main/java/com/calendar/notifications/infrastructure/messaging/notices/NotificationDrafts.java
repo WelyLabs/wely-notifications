@@ -14,8 +14,8 @@ import java.util.Optional;
  * Turns the records of the other services into notifications, worded in French. Empty when a record
  * calls for none: a message update, a call event nobody needs to hear about.
  *
- * <p>Call notifications carry no caller name: the call events hold user ids only, and this service
- * keeps no user directory.
+ * <p>Call notifications name the caller when wely-chat sends a name, and fall back to the call's
+ * media otherwise: this service keeps no user directory.
  */
 @Component
 public class NotificationDrafts {
@@ -38,16 +38,20 @@ public class NotificationDrafts {
             return Optional.empty();
         }
         boolean video = VIDEO.equals(call.media());
+        String media = video ? "vidéo" : "audio";
+        String name = call.startedByName() == null || call.startedByName().isBlank() ? null : call.startedByName();
         if ("RINGING".equals(event.type())) {
-            return Optional.of(Notification.draft(event.recipientId(), NotificationType.CALL_INCOMING,
-                    video ? "Appel vidéo" : "Appel audio", "On t'appelle sur Wely",
+            String title = name != null ? name + " t'appelle" : "Appel " + media;
+            String body = name != null ? "Appel " + media : "On t'appelle sur Wely";
+            return Optional.of(Notification.draft(event.recipientId(), NotificationType.CALL_INCOMING, title, body,
                     "/call/" + call.id(), call.id(), event.actorId()));
         }
         // MISSED means nobody answered: everyone but the caller missed it.
         if ("ENDED".equals(event.type()) && "MISSED".equals(call.status())
                 && !event.recipientId().equals(call.startedBy())) {
-            return Optional.of(Notification.draft(event.recipientId(), NotificationType.CALL_MISSED,
-                    video ? "Appel vidéo manqué" : "Appel audio manqué", "Tu as manqué un appel",
+            String title = name != null ? "Appel manqué de " + name : "Appel " + media + " manqué";
+            String body = name != null ? "Tu as manqué un appel " + media : "Tu as manqué un appel";
+            return Optional.of(Notification.draft(event.recipientId(), NotificationType.CALL_MISSED, title, body,
                     "/chat/" + call.conversationId(), call.id(), call.startedBy()));
         }
         return Optional.empty();

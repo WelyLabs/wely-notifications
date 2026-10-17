@@ -326,7 +326,7 @@ class NotificationServiceTest {
     @DisplayName("a ringing call is stored and streamed like any notification, then handed over with its call facts")
     void notifyCall_shouldStoreStreamAndDeliverTheCall() {
         deleted();
-        IncomingCall call = new IncomingCall("k1", "lea", CallMedia.AUDIO, "conv1");
+        IncomingCall call = new IncomingCall("k1", "lea", null, CallMedia.AUDIO, "conv1");
         Notification ringing = Notification.draft("bob", NotificationType.CALL_INCOMING, "Appel audio",
                 "On t'appelle sur Wely", "/call/k1", "k1", "lea");
         when(repository.insert(any())).thenAnswer(invocation -> Mono.just(invocation.<Notification>getArgument(0).withId("n1")));
@@ -350,7 +350,7 @@ class NotificationServiceTest {
         deleted("lea");
 
         StepVerifier.create(service.notifyCall(Notification.draft("bob", NotificationType.CALL_INCOMING, "Appel audio",
-                "On t'appelle sur Wely", "/call/k1", "k1", "lea"), new IncomingCall("k1", "lea", CallMedia.AUDIO, "c")))
+                "On t'appelle sur Wely", "/call/k1", "k1", "lea"), new IncomingCall("k1", "lea", null, CallMedia.AUDIO, "c")))
                 .verifyComplete();
 
         verifyNoInteractions(repository, live, pushService);

@@ -20,7 +20,13 @@ class NotificationDraftsTest {
     private final NotificationDrafts drafts = new NotificationDrafts(new DateNoticeFormatter(ZoneId.of("Europe/Paris")));
 
     private static CallEventBroadcastDTO call(String type, String recipient, String status, String media) {
-        CallEventBroadcastDTO.CallDTO call = new CallEventBroadcastDTO.CallDTO("k1", "conv1", "lea", media, status,
+        return call(type, recipient, status, media, null);
+    }
+
+    private static CallEventBroadcastDTO call(String type, String recipient, String status, String media,
+                                              String callerName) {
+        CallEventBroadcastDTO.CallDTO call = new CallEventBroadcastDTO.CallDTO("k1", "conv1", "lea", callerName,
+                media, status,
                 Instant.parse("2026-10-15T10:00:00Z"), null, List.of("lea", "bob"), List.of());
         return new CallEventBroadcastDTO(type, recipient, "lea", call);
     }
@@ -38,6 +44,27 @@ class NotificationDraftsTest {
                 NotificationType.CALL_INCOMING, "Appel vidéo", "On t'appelle sur Wely", "/call/k1", "k1", "lea"));
         assertThat(drafts.fromCall(call("RINGING", "bob", "RINGING", "AUDIO")).orElseThrow().title())
                 .isEqualTo("Appel audio");
+    }
+
+    @Test
+    @DisplayName("a ringing call with the caller's name says who calls, and the media in the body")
+    void fromCall_shouldNameTheCaller_whenRinging() {
+        assertThat(drafts.fromCall(call("RINGING", "bob", "RINGING", "VIDEO", "Léa"))).contains(Notification.draft(
+                "bob", NotificationType.CALL_INCOMING, "Léa t'appelle", "Appel vidéo", "/call/k1", "k1", "lea"));
+        assertThat(drafts.fromCall(call("RINGING", "bob", "RINGING", "AUDIO", "Léa")).orElseThrow().body())
+                .isEqualTo("Appel audio");
+        assertThat(drafts.fromCall(call("RINGING", "bob", "RINGING", "VIDEO", " ")).orElseThrow().title())
+                .isEqualTo("Appel vidéo");
+    }
+
+    @Test
+    @DisplayName("a missed call with the caller's name says whose call was missed")
+    void fromCall_shouldNameTheCaller_whenMissed() {
+        assertThat(drafts.fromCall(call("ENDED", "bob", "MISSED", "VIDEO", "Léa"))).contains(Notification.draft(
+                "bob", NotificationType.CALL_MISSED, "Appel manqué de Léa", "Tu as manqué un appel vidéo",
+                "/chat/conv1", "k1", "lea"));
+        assertThat(drafts.fromCall(call("ENDED", "bob", "MISSED", "AUDIO", "Léa")).orElseThrow().body())
+                .isEqualTo("Tu as manqué un appel audio");
     }
 
     @Test

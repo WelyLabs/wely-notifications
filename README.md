@@ -187,9 +187,16 @@ Le service push sait quel serveur envoie, sans compte ni clé d'API.
 ### Ce que reçoit le service worker
 
 ```json
-{ "title": "Appel vidéo", "body": "On t'appelle sur Wely", "tag": "call-<id>",
+{ "title": "Léa t'appelle", "body": "Appel vidéo", "tag": "call-<id>",
   "link": "/call/<id>", "type": "CALL_INCOMING", "requireInteraction": true }
 ```
+
+Call wording, from `startedByName` in `CALL_EVENTS` (the caller's `preferred_username`):
+
+| | With a name | Without one (older wely-chat, older call) |
+|---|---|---|
+| `CALL_INCOMING` | « Léa t'appelle » — « Appel vidéo » | « Appel vidéo » — « On t'appelle sur Wely » |
+| `CALL_MISSED` | « Appel manqué de Léa » — « Tu as manqué un appel vidéo » | « Appel vidéo manqué » — « Tu as manqué un appel » |
 
 | | Appels | Messages | Autres |
 |---|---|---|---|
@@ -197,7 +204,7 @@ Le service push sait quel serveur envoie, sans compte ni clé d'API.
 | `TTL` | 30 s | 24 h | 24 h |
 | `Urgency` | `high` | `normal` | `normal` |
 
-L'appel manqué porte **le même tag** que l'appel entrant : sur l'appareil, il remplace « Appel vidéo » au lieu de s'y ajouter. L'en-tête `Topic` est posé quand le tag est un topic valide (32 caractères base64url au plus).
+L'appel manqué porte **le même tag** que l'appel entrant : sur l'appareil, il remplace l'appel entrant au lieu de s'y ajouter. L'en-tête `Topic` est posé quand le tag est un topic valide (32 caractères base64url au plus).
 
 ---
 
@@ -214,7 +221,7 @@ What is sent, with the JDK and Reactor Netty alone:
 - **Body**:
 
 ```json
-{ "aps": { "alert": { "title": "Appel vidéo", "body": "On t'appelle sur Wely" }, "sound": "default",
+{ "aps": { "alert": { "title": "Léa t'appelle", "body": "Appel vidéo" }, "sound": "default",
            "thread-id": "call-<id>", "interruption-level": "time-sensitive" },
   "link": "/call/<id>", "type": "CALL_INCOMING" }
 ```
@@ -233,11 +240,11 @@ An iPhone registers **two tokens**: its notification token with `kind` `ALERT` (
 Ring, with no alert in `aps`: the app reports the call to CallKit from these fields alone, before calling any API.
 
 ```json
-{ "aps": {}, "callId": "<id>", "caller": "Appel vidéo", "callerId": "<businessId>", "media": "VIDEO",
+{ "aps": {}, "callId": "<id>", "caller": "Léa", "callerId": "<businessId>", "media": "VIDEO",
   "conversationId": "<id>", "link": "/call/<id>" }
 ```
 
-`media` is `AUDIO` or `VIDEO`. `caller` is the notification's title: `CALL_EVENTS` carry user ids only, so the app should show it until it has resolved `callerId` to a name, then update the CallKit call.
+`media` is `AUDIO` or `VIDEO`. `caller` is the caller's name, `startedByName` in `CALL_EVENTS`. A call event without one (an older wely-chat, or a call stored before the field) falls back to the notification's title, such as « Appel vidéo »: the app can then resolve `callerId` to a name and update the CallKit call.
 
 Hang-up:
 
@@ -408,7 +415,7 @@ They also cover the deleted-account markers, deletions by actor, a late friend r
 
 - **Une seule réplique.** Les consommateurs Kafka partagent un groupe, ils passeraient à l'échelle ; mais le flux SSE est un `Sink` **en mémoire** par utilisateur : une notification enregistrée par un pod n'atteint pas les onglets connectés à un autre. Plusieurs répliques demanderaient une diffusion entre pods (un topic à un groupe par pod, comme `wely-chat` pour ses messages).
 - **Closing a deleted account's streams is per pod.** Only the streams open on the pod that reads `USER_DELETED` are closed; with several replicas, a stream open on another pod would stay open.
-- **Pas de nom pour l'appelant.** Les événements d'appel ne portent que des identifiants et ce service ne tient pas d'annuaire : la notification dit « Appel vidéo — On t'appelle sur Wely », sans dire qui. Les messages et les demandes d'ami, eux, portent le nom de l'émetteur.
+- **The caller's name is the one at call start.** It is the `preferred_username` wely-chat read from the caller's token; this service keeps no user directory, so a rename during a call is not reflected, and a call event without a name falls back to « Appel vidéo — On t'appelle sur Wely ».
 - **Au plus une fois, sans outbox côté producteurs.** Un enregistrement en échec est abandonné après journalisation (avec trois nouvelles tentatives pour la projection des membres). Une notification manquée n'est pas rejouée.
 - **Erasure catch-up is daily.** A `USER_DELETED` still failing after five attempts, or lost to a pod stopping mid-way, leaves a marker without `erasedAt` (or no marker at all) until the next reconciliation pass: at most 24 h, plus 1 h per failed pass.
 - **Pas de purge.** Les notifications lues restent en base ; un index TTL sur `readAt` serait la prochaine étape.

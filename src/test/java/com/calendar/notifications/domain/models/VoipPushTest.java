@@ -15,8 +15,20 @@ class VoipPushTest {
         Notification ringing = new Notification("n1", "bob", NotificationType.CALL_INCOMING, "Appel vidéo",
                 "On t'appelle sur Wely", "/call/k1", "k1", 1, "lea", Instant.EPOCH, null);
 
-        assertThat(VoipPush.Ring.of(ringing, new IncomingCall("k1", "lea", CallMedia.VIDEO, "conv1")))
+        assertThat(VoipPush.Ring.of(ringing, new IncomingCall("k1", "lea", null, CallMedia.VIDEO, "conv1")))
                 .isEqualTo(new VoipPush.Ring("k1", "Appel vidéo", "lea", CallMedia.VIDEO, "conv1", "/call/k1"));
+    }
+
+    @Test
+    @DisplayName("CallKit shows the caller's name when the call has one, the notification's title otherwise")
+    void ringOf_shouldNameTheCaller_whenTheCallHasAName() {
+        Notification ringing = new Notification("n1", "bob", NotificationType.CALL_INCOMING, "Léa t'appelle",
+                "Appel vidéo", "/call/k1", "k1", 1, "lea", Instant.EPOCH, null);
+
+        assertThat(VoipPush.Ring.of(ringing, new IncomingCall("k1", "lea", "Léa", CallMedia.VIDEO, "conv1")).caller())
+                .isEqualTo("Léa");
+        assertThat(VoipPush.Ring.of(ringing, new IncomingCall("k1", "lea", " ", CallMedia.VIDEO, "conv1")).caller())
+                .isEqualTo("Léa t'appelle");
     }
 
     @Test

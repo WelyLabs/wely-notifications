@@ -79,7 +79,7 @@ class CallEventsConsumerTest {
 
         ArgumentCaptor<Notification> rung = ArgumentCaptor.forClass(Notification.class);
         verify(notificationService, timeout(2000)).notifyCall(rung.capture(),
-                eq(new IncomingCall("k1", "lea", CallMedia.VIDEO, "conv1")));
+                eq(new IncomingCall("k1", "lea", null, CallMedia.VIDEO, "conv1")));
         assertThat(rung.getValue().type()).isEqualTo(NotificationType.CALL_INCOMING);
         ArgumentCaptor<Notification> notified = ArgumentCaptor.forClass(Notification.class);
         verify(notificationService, timeout(2000)).notify(notified.capture());
@@ -87,6 +87,22 @@ class CallEventsConsumerTest {
         InOrder order = inOrder(pushService, notificationService);
         order.verify(pushService).endRinging("bob", "k1");
         order.verify(notificationService).notify(any());
+    }
+
+    @Test
+    @DisplayName("a ringing call with the caller's name names them, in the notification and for CallKit")
+    void callEvents_shouldNameTheCaller_whenTheRecordHasAName() {
+        when(notificationService.notifyCall(any(), any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
+
+        consumer.callEvents().accept(Flux.just(record("""
+                {"type":"RINGING","recipientId":"bob","actorId":"lea","call":{"id":"k1","conversationId":"conv1",
+                 "startedBy":"lea","startedByName":"Léa","media":"VIDEO","status":"RINGING",
+                 "startedAt":"2026-10-15T10:00:00Z","memberIds":["lea","bob"],"participants":[]}}""")));
+
+        ArgumentCaptor<Notification> rung = ArgumentCaptor.forClass(Notification.class);
+        verify(notificationService, timeout(2000)).notifyCall(rung.capture(),
+                eq(new IncomingCall("k1", "lea", "Léa", CallMedia.VIDEO, "conv1")));
+        assertThat(rung.getValue().title()).isEqualTo("Léa t'appelle");
     }
 
     @Test
@@ -112,7 +128,7 @@ class CallEventsConsumerTest {
     private static CallEventBroadcastDTO ended(String recipient, String startedBy,
                                                List<CallEventBroadcastDTO.ParticipantDTO> participants) {
         return new CallEventBroadcastDTO("ENDED", recipient, startedBy, new CallEventBroadcastDTO.CallDTO("k1", "conv1",
-                startedBy, "AUDIO", "ENDED", Instant.EPOCH, Instant.EPOCH, List.of("lea", "bob"), participants));
+                startedBy, null, "AUDIO", "ENDED", Instant.EPOCH, Instant.EPOCH, List.of("lea", "bob"), participants));
     }
 
     @Test

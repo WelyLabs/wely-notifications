@@ -8,12 +8,15 @@ public sealed interface VoipPush permits VoipPush.Ring, VoipPush.Hangup {
 
     String callId();
 
-    /** @param caller what the notification calls the caller, shown by CallKit until the app knows better */
+    /** @param caller the caller's name, or the notification's title without one; shown by CallKit */
     record Ring(String callId, String caller, String callerId, CallMedia media, String conversationId, String link)
             implements VoipPush {
 
         public static Ring of(Notification notification, IncomingCall call) {
-            return new Ring(call.callId(), notification.title(), call.callerId(), call.media(), call.conversationId(),
+            String caller = call.callerName() == null || call.callerName().isBlank()
+                    ? notification.title()
+                    : call.callerName();
+            return new Ring(call.callId(), caller, call.callerId(), call.media(), call.conversationId(),
                     notification.link());
         }
     }
