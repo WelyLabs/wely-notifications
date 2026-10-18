@@ -14,7 +14,7 @@ import reactor.core.publisher.Mono;
 
 import java.util.function.Consumer;
 
-/** Consumes wely-social's {@code FRIENDSHIP_CHANGED}: a friend request, and its acceptance. */
+/** Consumes wely-social's {@code FRIENDSHIP_CHANGED}: a friend request, its acceptance, a closeness upgrade. */
 @Configuration
 @ConditionalOnProperty(name = "app.consumers.enabled", havingValue = "true", matchIfMissing = true)
 public class FriendshipsConsumer {

@@ -23,7 +23,7 @@ class RecordReaderTest {
         StepVerifier.create(reader.read(record("""
                         {"type":"REQUESTED","fromUserId":"lea","fromUserName":"Léa","toUserId":"bob","extra":1}"""),
                         FriendshipChangedDTO.class, "T"))
-                .expectNext(new FriendshipChangedDTO("REQUESTED", "lea", "Léa", "bob"))
+                .expectNext(new FriendshipChangedDTO("REQUESTED", "lea", "Léa", "bob", null, null))
                 .verifyComplete();
     }
 

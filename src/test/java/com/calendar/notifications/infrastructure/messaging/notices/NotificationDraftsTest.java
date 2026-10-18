@@ -6,6 +6,7 @@ import com.calendar.notifications.infrastructure.messaging.models.BirthdayNotice
 import com.calendar.notifications.infrastructure.messaging.models.CallEventBroadcastDTO;
 import com.calendar.notifications.infrastructure.messaging.models.EventDateFixedDTO;
 import com.calendar.notifications.infrastructure.messaging.models.FriendshipChangedDTO;
+import com.calendar.notifications.infrastructure.messaging.models.FriendshipNoticeDTO;
 import com.calendar.notifications.infrastructure.messaging.models.MessageBroadcastDTO;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -171,7 +172,7 @@ class NotificationDraftsTest {
     @Test
     @DisplayName("a friend request tells the person asked, linking to the requester")
     void fromFriendship_shouldTellTheRequest() {
-        assertThat(drafts.fromFriendship(new FriendshipChangedDTO("REQUESTED", "lea", "Léa", "bob")))
+        assertThat(drafts.fromFriendship(new FriendshipChangedDTO("REQUESTED", "lea", "Léa", "bob", null, null)))
                 .contains(Notification.draft("bob", NotificationType.FRIEND_REQUEST, "Demande d'ami",
                         "Léa veut être ton ami", "/friends/lea", null, "lea"));
     }
@@ -179,20 +180,64 @@ class NotificationDraftsTest {
     @Test
     @DisplayName("an acceptance tells the one who had asked, linking to the new friend")
     void fromFriendship_shouldTellTheAcceptance() {
-        assertThat(drafts.fromFriendship(new FriendshipChangedDTO("ACCEPTED", "bob", null, "lea")))
+        assertThat(drafts.fromFriendship(new FriendshipChangedDTO("ACCEPTED", "bob", null, "lea", null, null)))
                 .contains(Notification.draft("lea", NotificationType.FRIEND_ACCEPTED, "Nouvel ami",
                         "Quelqu'un a accepté ta demande", "/friends/bob", null, "bob"));
+    }
+
+    private static FriendshipChangedDTO closeness(String closeness, String previousCloseness) {
+        return new FriendshipChangedDTO("CLOSENESS_CHANGED", "bob", "Bob", "lea", closeness, previousCloseness);
+    }
+
+    @Test
+    @DisplayName("an upgrade to intimate tells the one who proposed it, linking to the friend who accepted")
+    void fromFriendship_shouldTellAnUpgradeToIntimate() {
+        Notification intimate = Notification.draft("lea", NotificationType.CLOSENESS_UPGRADED,
+                "💝 Bob et toi êtes maintenant intimes", "Votre lien passe au niveau supérieur.", "/friends/bob",
+                null, "bob");
+
+        assertThat(drafts.fromFriendship(closeness("INTIMATE", "CLOSE"))).contains(intimate);
+        assertThat(drafts.fromFriendship(closeness("INTIMATE", "FRIEND"))).contains(intimate);
+    }
+
+    @Test
+    @DisplayName("an upgrade to close is worded as such, and a missing name falls back to someone")
+    void fromFriendship_shouldTellAnUpgradeToClose() {
+        assertThat(drafts.fromFriendship(closeness("CLOSE", "FRIEND"))).contains(Notification.draft("lea",
+                NotificationType.CLOSENESS_UPGRADED, "🧡 Bob et toi êtes maintenant proches",
+                "Vous partagez désormais un peu plus.", "/friends/bob", null, "bob"));
+        assertThat(drafts.fromFriendship(new FriendshipChangedDTO("CLOSENESS_CHANGED", "bob", null, "lea", "CLOSE",
+                "FRIEND")).orElseThrow().title()).isEqualTo("🧡 Quelqu'un et toi êtes maintenant proches");
+    }
+
+    @Test
+    @DisplayName("a downgrade, an unchanged closeness or an unknown or missing level notifies nobody")
+    void fromFriendship_shouldIgnoreAnythingButAnUpgrade() {
+        assertThat(drafts.fromFriendship(closeness("FRIEND", "CLOSE"))).isEmpty();
+        assertThat(drafts.fromFriendship(closeness("CLOSE", "INTIMATE"))).isEmpty();
+        assertThat(drafts.fromFriendship(closeness("CLOSE", "CLOSE"))).isEmpty();
+        assertThat(drafts.fromFriendship(closeness("INTIMATE", null))).isEmpty();
+        assertThat(drafts.fromFriendship(closeness(null, "FRIEND"))).isEmpty();
+        assertThat(drafts.fromFriendship(closeness("SOULMATE", "FRIEND"))).isEmpty();
+        assertThat(drafts.fromFriendship(closeness("INTIMATE", "STRANGER"))).isEmpty();
     }
 
     @Test
     @DisplayName("an unknown change or an incomplete record notifies nobody")
     void fromFriendship_shouldIgnoreEverythingElse() {
         for (String type : List.of("SNAPSHOT", "REJECTED", "CANCELLED", "REMOVED", "CLOSENESS_CHANGED")) {
-            assertThat(drafts.fromFriendship(new FriendshipChangedDTO(type, "lea", "Léa", "bob"))).isEmpty();
+            assertThat(drafts.fromFriendship(new FriendshipChangedDTO(type, "lea", "Léa", "bob", null, null))).isEmpty();
         }
-        assertThat(drafts.fromFriendship(new FriendshipChangedDTO(null, "lea", "Léa", "bob"))).isEmpty();
-        assertThat(drafts.fromFriendship(new FriendshipChangedDTO("REQUESTED", "lea", "Léa", null))).isEmpty();
-        assertThat(drafts.fromFriendship(new FriendshipChangedDTO("REQUESTED", null, "Léa", "bob"))).isEmpty();
+        // Upgrading levels do not make any other type a notification.
+        for (String type : List.of("SNAPSHOT", "REJECTED", "CANCELLED", "REMOVED")) {
+            assertThat(drafts.fromFriendship(new FriendshipChangedDTO(type, "lea", "Léa", "bob", "INTIMATE", "FRIEND")))
+                    .isEmpty();
+        }
+        assertThat(drafts.fromFriendship(new FriendshipChangedDTO("CLOSENESS_CHANGED", "bob", "Bob", null,
+                "INTIMATE", "FRIEND"))).isEmpty();
+        assertThat(drafts.fromFriendship(new FriendshipChangedDTO(null, "lea", "Léa", "bob", null, null))).isEmpty();
+        assertThat(drafts.fromFriendship(new FriendshipChangedDTO("REQUESTED", "lea", "Léa", null, null, null))).isEmpty();
+        assertThat(drafts.fromFriendship(new FriendshipChangedDTO("REQUESTED", null, "Léa", "bob", null, null))).isEmpty();
     }
 
     private static final LocalDate BIRTHDAY = LocalDate.parse("2027-03-12");
@@ -313,6 +358,73 @@ class NotificationDraftsTest {
                 null, null, null, null))).isEmpty();
         assertThat(drafts.fromBirthday(new BirthdayNoticeDTO("FRIEND_BIRTHDAY", "bob", "lea", "Léa", null, 0,
                 null, null, null, null))).isEmpty();
+    }
+
+    private static FriendshipNoticeDTO friendNotice(String type, String recipient, Integer monthsApart, Integer years) {
+        return new FriendshipNoticeDTO(type, recipient, "hugo", "Hugo", "CLOSE", monthsApart, years);
+    }
+
+    @Test
+    @DisplayName("a reunion nudge says how many months apart, linking to the outing proposal")
+    void fromFriendshipNotice_shouldNudgeWithTheMonthsApart() {
+        assertThat(drafts.fromFriendshipNotice(friendNotice("REUNION_NUDGE", "bob", 4, null)))
+                .contains(Notification.draft("bob", NotificationType.REUNION_NUDGE, "💭 Ça fait un moment, Hugo",
+                        "Vous ne vous êtes pas vus depuis 4 mois. Et si tu proposais une sortie ?",
+                        "/friends/hugo?propose=1", "reunion-hugo", "hugo"));
+        assertThat(drafts.fromFriendshipNotice(friendNotice("REUNION_NUDGE", "bob", 2, null)).orElseThrow().body())
+                .isEqualTo("Vous ne vous êtes pas vus depuis 2 mois. Et si tu proposais une sortie ?");
+    }
+
+    @Test
+    @DisplayName("under two months apart, the nudge says a while rather than a count")
+    void fromFriendshipNotice_shouldSayAWhile_underTwoMonths() {
+        for (int months : List.of(0, 1)) {
+            assertThat(drafts.fromFriendshipNotice(friendNotice("REUNION_NUDGE", "bob", months, null)).orElseThrow()
+                    .body()).isEqualTo("Vous ne vous êtes pas vus depuis un moment. Et si tu proposais une sortie ?");
+        }
+    }
+
+    @Test
+    @DisplayName("without any outing shared, the nudge suggests a first one")
+    void fromFriendshipNotice_shouldSuggestAFirstOuting_whenNeverShared() {
+        assertThat(drafts.fromFriendshipNotice(friendNotice("REUNION_NUDGE", "bob", null, null)))
+                .contains(Notification.draft("bob", NotificationType.REUNION_NUDGE, "💭 Et si tu voyais Hugo ?",
+                        "Vous n'avez encore partagé aucune sortie sur Wely.", "/friends/hugo?propose=1",
+                        "reunion-hugo", "hugo"));
+    }
+
+    @Test
+    @DisplayName("an anniversary counts the years in good French, linking to the memories, grouped by year")
+    void fromFriendshipNotice_shouldCelebrateTheAnniversary() {
+        assertThat(drafts.fromFriendshipNotice(friendNotice("FRIENDSHIP_ANNIVERSARY", "bob", null, 1)))
+                .contains(Notification.draft("bob", NotificationType.FRIENDSHIP_ANNIVERSARY, "💛 1 an d'amitié avec Hugo",
+                        "Revivez vos souvenirs ensemble.", "/friends/hugo/memories", "friendship-hugo-1", "hugo"));
+        Notification third = drafts.fromFriendshipNotice(friendNotice("FRIENDSHIP_ANNIVERSARY", "bob", null, 3))
+                .orElseThrow();
+        assertThat(third.title()).isEqualTo("💛 3 ans d'amitié avec Hugo");
+        assertThat(third.groupKey()).isEqualTo("friendship-hugo-3");
+    }
+
+    @Test
+    @DisplayName("an anniversary under a year, or without one, is dropped")
+    void fromFriendshipNotice_shouldDropAnAnniversary_withoutAYear() {
+        assertThat(drafts.fromFriendshipNotice(friendNotice("FRIENDSHIP_ANNIVERSARY", "bob", null, null))).isEmpty();
+        assertThat(drafts.fromFriendshipNotice(friendNotice("FRIENDSHIP_ANNIVERSARY", "bob", null, 0))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("an unknown type, an incomplete notice or a notice about oneself notifies nobody")
+    void fromFriendshipNotice_shouldIgnoreEverythingElse() {
+        assertThat(drafts.fromFriendshipNotice(friendNotice("FRIENDSHIP_FORGOTTEN", "bob", 4, 1))).isEmpty();
+        assertThat(drafts.fromFriendshipNotice(friendNotice(null, "bob", 4, 1))).isEmpty();
+        assertThat(drafts.fromFriendshipNotice(friendNotice("REUNION_NUDGE", null, 4, null))).isEmpty();
+        assertThat(drafts.fromFriendshipNotice(friendNotice("REUNION_NUDGE", "hugo", 4, null))).isEmpty();
+        assertThat(drafts.fromFriendshipNotice(new FriendshipNoticeDTO("REUNION_NUDGE", "bob", null, "Hugo", "CLOSE",
+                4, null))).isEmpty();
+        assertThat(drafts.fromFriendshipNotice(new FriendshipNoticeDTO("REUNION_NUDGE", "bob", "hugo", " ", "CLOSE",
+                4, null))).isEmpty();
+        assertThat(drafts.fromFriendshipNotice(new FriendshipNoticeDTO("FRIENDSHIP_ANNIVERSARY", "bob", "hugo", null,
+                "CLOSE", null, 1))).isEmpty();
     }
 
     @Test

@@ -13,7 +13,7 @@ Il écoute ce qui se passe ailleurs — un appel qui sonne, un message, la date 
 | **Port** | 8087 |
 | **Préfixe HTTP** | `/notifications-service` (la gateway route `/api/v1/notifications-service/**`) |
 | **Persistance** | MongoDB `notifications_db` |
-| **Inputs** | Kafka: `CALL_EVENTS`, `MESSAGE_BROADCAST`, `EVENT_GROUP_CHANGED`, `EVENT_DATE_FIXED`, `FRIENDSHIP_CHANGED`, `BIRTHDAY_NOTICES`, `USER_DELETED` |
+| **Inputs** | Kafka: `CALL_EVENTS`, `MESSAGE_BROADCAST`, `EVENT_GROUP_CHANGED`, `EVENT_DATE_FIXED`, `FRIENDSHIP_CHANGED`, `BIRTHDAY_NOTICES`, `FRIENDSHIP_NOTICES`, `USER_DELETED` |
 | **Sorties** | REST, flux SSE, Web Push (RFC 8030/8291/8292), native iOS push (APNs, off until a key is configured) |
 
 ---
@@ -39,7 +39,7 @@ Java 25 · Spring Boot 4 · WebFlux · Spring Cloud Stream (Kafka) · MongoDB r�
 ```mermaid
 graph LR
     CHAT["wely-chat"] -->|"CALL_EVENTS<br/>MESSAGE_BROADCAST"| K{{Kafka}}
-    EVT["wely-events"] -->|"EVENT_GROUP_CHANGED<br/>EVENT_DATE_FIXED<br/>BIRTHDAY_NOTICES"| K
+    EVT["wely-events"] -->|"EVENT_GROUP_CHANGED<br/>EVENT_DATE_FIXED<br/>BIRTHDAY_NOTICES<br/>FRIENDSHIP_NOTICES"| K
     SOC["wely-social"] -->|"FRIENDSHIP_CHANGED"| K
     USR["wely-users"] -->|"USER_DELETED"| K
 
@@ -57,7 +57,8 @@ graph LR
                         ┌──────────────────────────────────────────────────────┐
   Kafka (octets) ──────▶│ infrastructure/messaging                             │
                         │   CallEvents · Messages · EventGroups · EventDates   │
-                        │   Friendships · BirthdayNotices → NotificationDrafts │
+                        │   Friendships · BirthdayNotices                      │
+                        │   FriendshipNotices      →  NotificationDrafts       │
                         │   UserDeleted consumer   →  AccountErasureService    │
                         └──────────────────────┬───────────────────────────────┘
   REST / SSE ──────────▶ application/rest      │ Notification (brouillon)
@@ -147,6 +148,9 @@ The comments are merged with the updates as signals (`materialize` / `dematerial
 | `EVENT_MOVED` | `EVENTS` | `EVENT_DATE_FIXED` avec une date précédente | `/event/{eventId}` |
 | `FRIEND_REQUEST` | `FRIENDS` | `FRIENDSHIP_CHANGED`, `REQUESTED` | `/friends/{fromUserId}` |
 | `FRIEND_ACCEPTED` | `FRIENDS` | `FRIENDSHIP_CHANGED`, `ACCEPTED` | `/friends/{fromUserId}` |
+| `CLOSENESS_UPGRADED` | `FRIENDS` | `FRIENDSHIP_CHANGED`, `CLOSENESS_CHANGED` when `previousCloseness < closeness` (FRIEND < CLOSE < INTIMATE), to `toUserId`, who proposed it | `/friends/{fromUserId}` |
+| `REUNION_NUDGE` | `FRIENDS` | `FRIENDSHIP_NOTICES`, `REUNION_NUDGE` | `/friends/{friendId}?propose=1` |
+| `FRIENDSHIP_ANNIVERSARY` | `FRIENDS` | `FRIENDSHIP_NOTICES`, `FRIENDSHIP_ANNIVERSARY`, 1 year or more | `/friends/{friendId}/memories` |
 | `BIRTHDAY_TODAY` | `BIRTHDAYS` | `BIRTHDAY_NOTICES`, `BIRTHDAY_TODAY`, to the honoree only | `/calendar?date=YYYY-MM-DD` |
 | `FRIEND_BIRTHDAY` | `BIRTHDAYS` | `BIRTHDAY_NOTICES`, `FRIEND_BIRTHDAY`, worded by closeness | `/friends/{honoreeId}` |
 | `BIRTHDAY_SURPRISE_PROPOSAL` | `BIRTHDAYS` | `BIRTHDAY_NOTICES`, `SURPRISE_PROPOSAL` | `/calendar?surpriseFor={honoreeId}&date=YYYY-MM-DD`, or `/event/{surpriseEventId}` once a surprise exists |
@@ -155,6 +159,18 @@ The comments are merged with the updates as signals (`materialize` / `dematerial
 Le centre de notifications enregistre **toujours** ; seules les préférences de push dépendent de la catégorie. Toutes sont actives par défaut.
 
 Birthday notifications carry the group key `birthday-{honoreeId}-{year}` and the honoree as `actorId`. No surprise notice ever reaches its honoree, even if the record asks for it.
+
+Friendship notices carry the friend as `actorId`, and the group key `reunion-{friendId}` or `friendship-{friendId}-{years}`. Their wording, where `{n}` is the friend's name:
+
+| Notification | Title / body |
+|---|---|
+| `CLOSENESS_UPGRADED` to INTIMATE | « 💝 {n} et toi êtes maintenant intimes » / « Votre lien passe au niveau supérieur. » |
+| `CLOSENESS_UPGRADED` to CLOSE | « 🧡 {n} et toi êtes maintenant proches » / « Vous partagez désormais un peu plus. » |
+| `REUNION_NUDGE`, `monthsApart` known | « 💭 Ça fait un moment, {n} » / « Vous ne vous êtes pas vus depuis {m} mois. Et si tu proposais une sortie ? », « depuis un moment » under 2 months |
+| `REUNION_NUDGE`, no outing ever shared | « 💭 Et si tu voyais {n} ? » / « Vous n'avez encore partagé aucune sortie sur Wely. » |
+| `FRIENDSHIP_ANNIVERSARY` | « 💛 {y} an d'amitié avec {n} », « ans » above 1 / « Revivez vos souvenirs ensemble. » |
+
+The person who accepted a closeness upgrade is not notified: the app celebrates it on the spot.
 
 ### OpenAPI
 
@@ -276,14 +292,15 @@ Only `USER_DELETED` starts from the **earliest** offset: a deletion published be
 | `MESSAGE_BROADCAST_TOPIC` | `{senderId, senderName, receiverId, conversationId, content, photo, type, kind}` | `MESSAGE`, groupé par conversation ; extrait de 120 caractères, « 📷 Photo » pour une photo ; `SYSTEM` ignoré |
 | `EVENT_GROUP_TOPIC` | `{eventId, title, organizerId, memberIds, version, deleted}` | met à jour la projection versionnée `event_members` ; une version plus ancienne est ignorée, un événement supprimé garde sa version et plus aucun membre |
 | `EVENT_DATE_FIXED_TOPIC` | `{eventId, title, start, end, organizerId, previousStart, previousEnd}` | `EVENT_DATE_FIXED` ou `EVENT_MOVED` à chaque membre sauf l'organisateur, date en français dans `NOTICES_ZONE` ; événement inconnu de la projection → ignoré et journalisé |
-| `FRIENDSHIP_TOPIC` | `{type: REQUESTED\|ACCEPTED, fromUserId, fromUserName, toUserId}` | `FRIEND_REQUEST` ou `FRIEND_ACCEPTED` à `toUserId` |
+| `FRIENDSHIP_TOPIC` | `{type, fromUserId, fromUserName, toUserId, closeness, previousCloseness, since, version, occurredAt}` | `REQUESTED` → `FRIEND_REQUEST`, `ACCEPTED` → `FRIEND_ACCEPTED`, an upgrading `CLOSENESS_CHANGED` → `CLOSENESS_UPGRADED`, all to `toUserId`; `REJECTED`, `CANCELLED`, `REMOVED`, `SNAPSHOT` and downgrades → ignored |
+| `FRIENDSHIP_NOTICES_TOPIC` | `{type, recipientId, friendId, friendName, closeness, monthsApart, years, …}` (`lastSharedAt`, `lastSharedEventId`, `since` unread) | `REUNION_NUDGE` or `FRIENDSHIP_ANNIVERSARY` to `recipientId`; unknown type, missing name or ids, a notice about oneself, an anniversary under a year → ignored |
 | `BIRTHDAY_NOTICES_TOPIC` | `{type, recipientId, honoreeId, honoreeName, date, daysUntil, closeness, surpriseEventId, organizerId, organizerName}` | one birthday notification to `recipientId`, see the types above; unknown type or missing name, date or ids → ignored |
 | `USER_DELETED_TOPIC` | `{userId, deletedAt}` (`deletedAt` missing from older records) | erases the account, see [Account deletion](#account-deletion) |
 
 La projection `event_members` existe parce que `EVENT_DATE_FIXED` ne porte pas la liste des membres.
 A deleted event keeps its version there, with no member **and no title**.
 
-`USER_DELETED` is consumed by a `Function<Flux<Message<byte[]>>, Mono<Void>>`, not a `Consumer`: the binder subscribes to the result itself, with no manual `subscribe()`, and creates no output binding (the integration test asserts it). The other six consumers still subscribe themselves.
+`USER_DELETED` is consumed by a `Function<Flux<Message<byte[]>>, Mono<Void>>`, not a `Consumer`: the binder subscribes to the result itself, with no manual `subscribe()`, and creates no output binding (the integration test asserts it). `FRIENDSHIP_NOTICES` is consumed the same way. The other six consumers still subscribe themselves.
 
 ---
 
@@ -368,11 +385,12 @@ Toutes les réponses d'erreur sont des `ProblemDetail` (RFC 7807), avec `code` e
 | `MESSAGE_BROADCAST_TOPIC` | `MESSAGE_BROADCAST` | Messages de `wely-chat` |
 | `EVENT_GROUP_TOPIC` | `EVENT_GROUP_CHANGED` | Membres des sorties, de `wely-events` |
 | `EVENT_DATE_FIXED_TOPIC` | `EVENT_DATE_FIXED` | Dates fixées ou décalées, de `wely-events` |
-| `FRIENDSHIP_TOPIC` | `FRIENDSHIP_CHANGED` | Demandes d'ami, de `wely-social` |
+| `FRIENDSHIP_TOPIC` | `FRIENDSHIP_CHANGED` | Demandes d'ami et changements de proximité, de `wely-social` |
 | `BIRTHDAY_NOTICES_TOPIC` | `BIRTHDAY_NOTICES` | Birthday reminders and surprises, from `wely-events` |
+| `FRIENDSHIP_NOTICES_TOPIC` | `FRIENDSHIP_NOTICES` | Reunion nudges and friendship anniversaries, from `wely-events` |
 | `USER_DELETED_TOPIC` | `USER_DELETED` | Deleted accounts, from `wely-users` |
 | `NOTICES_ZONE` | `Europe/Paris` | Fuseau des dates écrites dans les notifications |
-| `NOTIFICATIONS_CONSUMERS_ENABLED` | `true` | Turns off the seven Kafka consumers |
+| `NOTIFICATIONS_CONSUMERS_ENABLED` | `true` | Turns off the eight Kafka consumers |
 | `USERS_API_URL` | empty (`http://localhost:8082` in `dev`) | wely-users' in-cluster URL, read by the reconciliation. Empty: the service starts, each pass fails with `NTF-TEC-002` |
 | `DELETED_USERS_READER_SECRET` | empty | Reader secret of wely-users' deleted-accounts list, sent in `X-Internal-Secret`. Empty: same effect as above |
 | `ACCOUNT_ERASURE_RECONCILIATION_ENABLED` | `true` | `false` stops the reconciliation loop |

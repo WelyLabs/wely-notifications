@@ -6,10 +6,12 @@ import com.calendar.notifications.infrastructure.messaging.models.BirthdayNotice
 import com.calendar.notifications.infrastructure.messaging.models.CallEventBroadcastDTO;
 import com.calendar.notifications.infrastructure.messaging.models.EventDateFixedDTO;
 import com.calendar.notifications.infrastructure.messaging.models.FriendshipChangedDTO;
+import com.calendar.notifications.infrastructure.messaging.models.FriendshipNoticeDTO;
 import com.calendar.notifications.infrastructure.messaging.models.MessageBroadcastDTO;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -29,6 +31,7 @@ public class NotificationDrafts {
     private static final String CLOSE = "CLOSE";
     private static final String INTIMATE = "INTIMATE";
     private static final String SOMEONE = "Quelqu'un";
+    private static final List<String> CLOSENESS_ORDER = List.of("FRIEND", CLOSE, INTIMATE);
 
     private final DateNoticeFormatter dates;
 
@@ -86,20 +89,82 @@ public class NotificationDrafts {
                 fixed.organizerId());
     }
 
-    /** REQUESTED tells the person asked; ACCEPTED tells the one who had asked. */
+    /**
+     * REQUESTED tells the person asked; ACCEPTED tells the one who had asked; a closeness upgrade tells the
+     * one who proposed it, the actor having accepted it in the app. Anything else, a downgrade included, is ignored.
+     */
     public Optional<Notification> fromFriendship(FriendshipChangedDTO change) {
         if (change.toUserId() == null || change.fromUserId() == null) {
             return Optional.empty();
         }
-        String name = change.fromUserName() != null ? change.fromUserName() : "Quelqu'un";
+        String name = change.fromUserName() != null ? change.fromUserName() : SOMEONE;
         String link = "/friends/" + change.fromUserId();
         return switch (change.type() == null ? "" : change.type()) {
             case "REQUESTED" -> Optional.of(Notification.draft(change.toUserId(), NotificationType.FRIEND_REQUEST,
                     "Demande d'ami", name + " veut être ton ami", link, null, change.fromUserId()));
             case "ACCEPTED" -> Optional.of(Notification.draft(change.toUserId(), NotificationType.FRIEND_ACCEPTED,
                     "Nouvel ami", name + " a accepté ta demande", link, null, change.fromUserId()));
+            case "CLOSENESS_CHANGED" -> closenessUpgrade(change, name, link);
             default -> Optional.empty();
         };
+    }
+
+    private static Optional<Notification> closenessUpgrade(FriendshipChangedDTO change, String name, String link) {
+        int previous = rank(change.previousCloseness());
+        int current = rank(change.closeness());
+        if (previous < 0 || current <= previous) {
+            return Optional.empty();
+        }
+        NotificationType type = NotificationType.CLOSENESS_UPGRADED;
+        return Optional.of(INTIMATE.equals(change.closeness())
+                ? Notification.draft(change.toUserId(), type, "💝 " + name + " et toi êtes maintenant intimes",
+                        "Votre lien passe au niveau supérieur.", link, null, change.fromUserId())
+                : Notification.draft(change.toUserId(), type, "🧡 " + name + " et toi êtes maintenant proches",
+                        "Vous partagez désormais un peu plus.", link, null, change.fromUserId()));
+    }
+
+    // FRIEND < CLOSE < INTIMATE; -1 for a missing or unknown level (List.of rejects indexOf(null)).
+    private static int rank(String closeness) {
+        return closeness == null ? -1 : CLOSENESS_ORDER.indexOf(closeness);
+    }
+
+    /**
+     * A reunion nudge or a friendship anniversary, worded around the friend's name. Empty without a recipient,
+     * a friend or a name, for a notice about oneself, for a type it does not know, and for an anniversary under a year.
+     */
+    public Optional<Notification> fromFriendshipNotice(FriendshipNoticeDTO notice) {
+        String name = notice.friendName();
+        if (notice.recipientId() == null || notice.friendId() == null || name == null || name.isBlank()
+                || notice.type() == null || notice.recipientId().equals(notice.friendId())) {
+            return Optional.empty();
+        }
+        return switch (notice.type()) {
+            case "REUNION_NUDGE" -> Optional.of(reunionNudge(notice, name));
+            case "FRIENDSHIP_ANNIVERSARY" -> notice.years() == null || notice.years() < 1
+                    ? Optional.empty()
+                    : Optional.of(Notification.draft(notice.recipientId(), NotificationType.FRIENDSHIP_ANNIVERSARY,
+                            "💛 " + notice.years() + (notice.years() > 1 ? " ans" : " an") + " d'amitié avec " + name,
+                            "Revivez vos souvenirs ensemble.", "/friends/" + notice.friendId() + "/memories",
+                            "friendship-" + notice.friendId() + "-" + notice.years(), notice.friendId()));
+            default -> Optional.empty();
+        };
+    }
+
+    // No months apart means no outing ever shared; under two months, "un moment" reads better than "1 mois".
+    private static Notification reunionNudge(FriendshipNoticeDTO notice, String name) {
+        Integer months = notice.monthsApart();
+        String title;
+        String body;
+        if (months == null) {
+            title = "💭 Et si tu voyais " + name + " ?";
+            body = "Vous n'avez encore partagé aucune sortie sur Wely.";
+        } else {
+            title = "💭 Ça fait un moment, " + name;
+            body = "Vous ne vous êtes pas vus depuis " + (months < 2 ? "un moment" : months + " mois")
+                    + ". Et si tu proposais une sortie ?";
+        }
+        return Notification.draft(notice.recipientId(), NotificationType.REUNION_NUDGE, title, body,
+                "/friends/" + notice.friendId() + "?propose=1", "reunion-" + notice.friendId(), notice.friendId());
     }
 
     /**

@@ -13,6 +13,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.ZoneId;
@@ -79,8 +80,37 @@ class FriendshipsConsumerTest {
     }
 
     @Test
-    @DisplayName("snapshot, rejection, cancellation, removal and closeness records notify nobody")
-    void friendships_shouldIgnoreEveryTypeButRequestedAndAccepted() {
+    @DisplayName("a closeness upgrade tells the one who proposed it, read from the full payload")
+    void friendships_shouldNotifyAClosenessUpgrade() {
+        when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
+
+        consumer.friendships().accept(Flux.just(CallEventsConsumerTest.record(
+                full("CLOSENESS_CHANGED", "\"INTIMATE\"", "\"CLOSE\""))));
+
+        verify(notificationService, timeout(2000)).notify(Notification.draft("lea", NotificationType.CLOSENESS_UPGRADED,
+                "💝 Bob et toi êtes maintenant intimes", "Votre lien passe au niveau supérieur.", "/friends/bob", null,
+                "bob"));
+    }
+
+    @Test
+    @DisplayName("the fields left unread never make a record unreadable, even to a strict mapper")
+    void friendships_shouldIgnoreUnreadFields_withAStrictMapper() {
+        consumer = new FriendshipsConsumer(notificationService,
+                new NotificationDrafts(new DateNoticeFormatter(ZoneId.of("Europe/Paris"))),
+                new RecordReader(JsonMapper.builder().enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).build()));
+        when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
+
+        consumer.friendships().accept(Flux.just(CallEventsConsumerTest.record(full("CLOSENESS_CHANGED", "\"CLOSE\"",
+                "\"FRIEND\""))));
+
+        verify(notificationService, timeout(2000)).notify(Notification.draft("lea", NotificationType.CLOSENESS_UPGRADED,
+                "🧡 Bob et toi êtes maintenant proches", "Vous partagez désormais un peu plus.", "/friends/bob", null,
+                "bob"));
+    }
+
+    @Test
+    @DisplayName("snapshot, rejection, cancellation, removal and closeness downgrades notify nobody")
+    void friendships_shouldIgnoreEveryTypeButRequestedAcceptedAndUpgrades() {
         when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
 
         consumer.friendships().accept(Flux.just(
@@ -88,7 +118,8 @@ class FriendshipsConsumerTest {
                 CallEventsConsumerTest.record(full("REJECTED", "null", "null")),
                 CallEventsConsumerTest.record(full("CANCELLED", "null", "null")),
                 CallEventsConsumerTest.record(full("REMOVED", "null", "\"FRIEND\"")),
-                CallEventsConsumerTest.record(full("CLOSENESS_CHANGED", "\"INTIMATE\"", "\"FRIEND\"")),
+                CallEventsConsumerTest.record(full("CLOSENESS_CHANGED", "\"FRIEND\"", "\"INTIMATE\"")),
+                CallEventsConsumerTest.record(full("CLOSENESS_CHANGED", "\"CLOSE\"", "\"CLOSE\"")),
                 // Read last: once it is notified, every record before it has been handled.
                 CallEventsConsumerTest.record(full("REQUESTED", "null", "null"))));
 
