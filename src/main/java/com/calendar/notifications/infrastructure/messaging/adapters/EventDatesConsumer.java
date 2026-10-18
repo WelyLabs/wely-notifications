@@ -14,7 +14,7 @@ import org.springframework.messaging.Message;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * Consumes wely-events' {@code EVENT_DATE_FIXED}: every member but the organizer is told the date was
@@ -42,12 +42,8 @@ public class EventDatesConsumer {
     }
 
     @Bean
-    public Consumer<Flux<Message<byte[]>>> eventDates() {
-        return flux -> flux
-                .concatMap(this::handle)
-                .subscribe(
-                        unused -> { },
-                        error -> log.error("{} stream terminated; no date notifications until restart", TOPIC, error));
+    public Function<Flux<Message<byte[]>>, Mono<Void>> eventDates() {
+        return records -> records.concatMap(this::handle).then();
     }
 
     private Mono<Void> handle(Message<byte[]> record) {

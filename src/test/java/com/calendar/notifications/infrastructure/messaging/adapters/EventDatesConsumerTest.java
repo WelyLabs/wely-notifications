@@ -16,6 +16,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.ZoneId;
@@ -27,6 +28,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -59,7 +61,7 @@ class EventDatesConsumerTest {
                 .thenReturn(Mono.just(new EventMembership("e1", "Bowling", List.of("olivia", "bob", "carl"), 2)));
         when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
 
-        consumer.eventDates().accept(Flux.just(fixed("e1", "null")));
+        StepVerifier.create(consumer.eventDates().apply(Flux.just(fixed("e1", "null")))).verifyComplete();
 
         ArgumentCaptor<Notification> notified = ArgumentCaptor.forClass(Notification.class);
         verify(notificationService, timeout(2000).times(2)).notify(notified.capture());
@@ -75,7 +77,7 @@ class EventDatesConsumerTest {
                 .thenReturn(Mono.just(new EventMembership("e1", "Bowling", List.of("olivia", "bob"), 2)));
         when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
 
-        consumer.eventDates().accept(Flux.just(fixed("e1", "\"2026-10-14T17:00:00Z\"")));
+        StepVerifier.create(consumer.eventDates().apply(Flux.just(fixed("e1", "\"2026-10-14T17:00:00Z\"")))).verifyComplete();
 
         verify(notificationService, timeout(2000))
                 .notify(argThat(notification -> notification.type() == NotificationType.EVENT_MOVED));
@@ -86,7 +88,7 @@ class EventDatesConsumerTest {
     void eventDates_shouldSkipAnUnknownEvent() {
         when(membershipService.find(any())).thenReturn(Mono.empty());
 
-        consumer.eventDates().accept(Flux.just(fixed("e9", "null")));
+        StepVerifier.create(consumer.eventDates().apply(Flux.just(fixed("e9", "null")))).verifyComplete();
 
         verify(membershipService, timeout(2000)).find("e9");
         verify(notificationService, never()).notify(any());
@@ -102,8 +104,8 @@ class EventDatesConsumerTest {
         when(notificationService.notify(argThat(n -> n != null && "carl".equals(n.recipientId()))))
                 .thenAnswer(call -> Mono.just(call.getArgument(0)));
 
-        consumer.eventDates().accept(Flux.just(CallEventsConsumerTest.record("{"),
-                CallEventsConsumerTest.record("{\"eventId\":\"e1\"}"), fixed("e1", "null")));
+        StepVerifier.create(consumer.eventDates().apply(Flux.just(CallEventsConsumerTest.record("{"),
+                CallEventsConsumerTest.record("{\"eventId\":\"e1\"}"), fixed("e1", "null")))).verifyComplete();
 
         verify(notificationService, timeout(2000))
                 .notify(argThat(n -> n != null && "carl".equals(n.recipientId())));
@@ -117,8 +119,16 @@ class EventDatesConsumerTest {
                 .thenReturn(Mono.just(new EventMembership("e2", "Bowling", List.of("bob"), 1)));
         when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
 
-        consumer.eventDates().accept(Flux.just(fixed("e1", "null"), fixed("e2", "null")));
+        StepVerifier.create(consumer.eventDates().apply(Flux.just(fixed("e1", "null"), fixed("e2", "null")))).verifyComplete();
 
         verify(notificationService, timeout(2000)).notify(argThat(n -> "bob".equals(n.recipientId())));
+    }
+
+    @Test
+    @DisplayName("nothing is read until the binder subscribes to the function's result")
+    void eventDates_shouldDoNothingUntilTheBinderSubscribes() {
+        consumer.eventDates().apply(Flux.just(fixed("e1", "null")));
+
+        verifyNoInteractions(notificationService, membershipService);
     }
 }

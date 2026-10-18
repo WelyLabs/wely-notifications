@@ -14,6 +14,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.Message;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.ZoneId;
@@ -22,6 +23,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -51,7 +53,7 @@ class MessagesConsumerTest {
     void messages_shouldNotifyTheReceiver() {
         when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
 
-        consumer.messages().accept(Flux.just(message("bob", "TEXT", "NEW")));
+        StepVerifier.create(consumer.messages().apply(Flux.just(message("bob", "TEXT", "NEW")))).verifyComplete();
 
         verify(notificationService, timeout(2000)).notify(Notification.draft("bob", NotificationType.MESSAGE, "Léa",
                 "Salut", "/chat/conv1", "conv1", "lea"));
@@ -60,7 +62,7 @@ class MessagesConsumerTest {
     @Test
     @DisplayName("system notices and updates notify nobody")
     void messages_shouldIgnoreSystemNoticesAndUpdates() {
-        consumer.messages().accept(Flux.just(message("bob", "SYSTEM", "NEW"), message("bob", "TEXT", "UPDATED")));
+        StepVerifier.create(consumer.messages().apply(Flux.just(message("bob", "SYSTEM", "NEW"), message("bob", "TEXT", "UPDATED")))).verifyComplete();
 
         verify(notificationService, never()).notify(any());
     }
@@ -72,9 +74,17 @@ class MessagesConsumerTest {
                 .thenReturn(Mono.error(new IllegalStateException("store down")))
                 .thenAnswer(call -> Mono.just(call.getArgument(0)));
 
-        consumer.messages().accept(Flux.just(CallEventsConsumerTest.record("[]"), message("bob", "TEXT", "NEW"),
-                message("carl", "TEXT", "NEW")));
+        StepVerifier.create(consumer.messages().apply(Flux.just(CallEventsConsumerTest.record("[]"), message("bob", "TEXT", "NEW"),
+                message("carl", "TEXT", "NEW")))).verifyComplete();
 
         verify(notificationService, timeout(2000).times(2)).notify(any());
+    }
+
+    @Test
+    @DisplayName("nothing is read until the binder subscribes to the function's result")
+    void messages_shouldDoNothingUntilTheBinderSubscribes() {
+        consumer.messages().apply(Flux.just(message("bob", "TEXT", "NEW")));
+
+        verifyNoInteractions(notificationService);
     }
 }

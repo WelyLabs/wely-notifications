@@ -12,7 +12,7 @@ import org.springframework.messaging.Message;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.util.function.Consumer;
+import java.util.function.Function;
 
 /** Consumes wely-social's {@code FRIENDSHIP_CHANGED}: a friend request, its acceptance, a closeness upgrade. */
 @Configuration
@@ -33,12 +33,8 @@ public class FriendshipsConsumer {
     }
 
     @Bean
-    public Consumer<Flux<Message<byte[]>>> friendships() {
-        return flux -> flux
-                .concatMap(this::handle)
-                .subscribe(
-                        unused -> { },
-                        error -> log.error("{} stream terminated; no friendship notifications until restart", TOPIC, error));
+    public Function<Flux<Message<byte[]>>, Mono<Void>> friendships() {
+        return records -> records.concatMap(this::handle).then();
     }
 
     private Mono<Void> handle(Message<byte[]> record) {

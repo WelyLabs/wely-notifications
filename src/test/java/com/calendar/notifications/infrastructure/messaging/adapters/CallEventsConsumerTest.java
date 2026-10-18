@@ -23,6 +23,7 @@ import org.springframework.messaging.Message;
 import org.springframework.messaging.support.MessageBuilder;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.nio.charset.StandardCharsets;
@@ -38,6 +39,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -75,7 +77,7 @@ class CallEventsConsumerTest {
         when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
         when(pushService.endRinging("bob", "k1")).thenReturn(Mono.empty());
 
-        consumer.callEvents().accept(Flux.just(call("RINGING", "bob", "RINGING"), call("ENDED", "bob", "MISSED")));
+        StepVerifier.create(consumer.callEvents().apply(Flux.just(call("RINGING", "bob", "RINGING"), call("ENDED", "bob", "MISSED")))).verifyComplete();
 
         ArgumentCaptor<Notification> rung = ArgumentCaptor.forClass(Notification.class);
         verify(notificationService, timeout(2000)).notifyCall(rung.capture(),
@@ -94,10 +96,10 @@ class CallEventsConsumerTest {
     void callEvents_shouldNameTheCaller_whenTheRecordHasAName() {
         when(notificationService.notifyCall(any(), any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
 
-        consumer.callEvents().accept(Flux.just(record("""
+        StepVerifier.create(consumer.callEvents().apply(Flux.just(record("""
                 {"type":"RINGING","recipientId":"bob","actorId":"lea","call":{"id":"k1","conversationId":"conv1",
                  "startedBy":"lea","startedByName":"Léa","media":"VIDEO","status":"RINGING",
-                 "startedAt":"2026-10-15T10:00:00Z","memberIds":["lea","bob"],"participants":[]}}""")));
+                 "startedAt":"2026-10-15T10:00:00Z","memberIds":["lea","bob"],"participants":[]}}""")))).verifyComplete();
 
         ArgumentCaptor<Notification> rung = ArgumentCaptor.forClass(Notification.class);
         verify(notificationService, timeout(2000)).notifyCall(rung.capture(),
@@ -110,7 +112,7 @@ class CallEventsConsumerTest {
     void callEvents_shouldOnlyHangUp_forAnAnsweredCall() {
         when(pushService.endRinging("bob", "k1")).thenReturn(Mono.empty());
 
-        consumer.callEvents().accept(Flux.just(call("ENDED", "bob", "ENDED")));
+        StepVerifier.create(consumer.callEvents().apply(Flux.just(call("ENDED", "bob", "ENDED")))).verifyComplete();
 
         verify(pushService, timeout(2000)).endRinging("bob", "k1");
         verify(notificationService, never()).notify(any());
@@ -120,7 +122,7 @@ class CallEventsConsumerTest {
     @Test
     @DisplayName("the caller's own ENDED stops nothing")
     void callEvents_shouldNotHangUpTheCaller() {
-        consumer.callEvents().accept(Flux.just(call("ENDED", "lea", "MISSED")));
+        StepVerifier.create(consumer.callEvents().apply(Flux.just(call("ENDED", "lea", "MISSED")))).verifyComplete();
 
         verify(pushService, timeout(500).times(0)).endRinging(any(), any());
     }
@@ -154,9 +156,17 @@ class CallEventsConsumerTest {
                 .thenReturn(Mono.error(new IllegalStateException("store down")))
                 .thenAnswer(call -> Mono.just(call.getArgument(0)));
 
-        consumer.callEvents().accept(Flux.just(record("{not json"), call("RINGING", "bob", "RINGING"),
-                call("RINGING", "carl", "RINGING")));
+        StepVerifier.create(consumer.callEvents().apply(Flux.just(record("{not json"), call("RINGING", "bob", "RINGING"),
+                call("RINGING", "carl", "RINGING")))).verifyComplete();
 
         verify(notificationService, timeout(2000).times(2)).notifyCall(any(), any());
+    }
+
+    @Test
+    @DisplayName("nothing is read until the binder subscribes to the function's result")
+    void callEvents_shouldDoNothingUntilTheBinderSubscribes() {
+        consumer.callEvents().apply(Flux.just(call("RINGING", "bob", "RINGING")));
+
+        verifyNoInteractions(notificationService, pushService);
     }
 }

@@ -12,7 +12,7 @@ import org.springframework.messaging.Message;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.util.function.Consumer;
+import java.util.function.Function;
 
 /** Consumes wely-events' {@code BIRTHDAY_NOTICES}: one notice, one recipient, already chosen upstream. */
 @Configuration
@@ -34,12 +34,8 @@ public class BirthdayNoticesConsumer {
     }
 
     @Bean
-    public Consumer<Flux<Message<byte[]>>> birthdayNotices() {
-        return flux -> flux
-                .concatMap(this::handle)
-                .subscribe(
-                        unused -> { },
-                        error -> log.error("{} stream terminated; no birthday notifications until restart", TOPIC, error));
+    public Function<Flux<Message<byte[]>>, Mono<Void>> birthdayNotices() {
+        return records -> records.concatMap(this::handle).then();
     }
 
     private Mono<Void> handle(Message<byte[]> record) {

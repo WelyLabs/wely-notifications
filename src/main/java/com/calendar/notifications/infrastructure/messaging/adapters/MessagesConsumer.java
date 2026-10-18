@@ -12,7 +12,7 @@ import org.springframework.messaging.Message;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.util.function.Consumer;
+import java.util.function.Function;
 
 /** Consumes wely-chat's message broadcasts: each new text message notifies its receiver, grouped per conversation. */
 @Configuration
@@ -33,12 +33,8 @@ public class MessagesConsumer {
     }
 
     @Bean
-    public Consumer<Flux<Message<byte[]>>> messages() {
-        return flux -> flux
-                .concatMap(this::handle)
-                .subscribe(
-                        unused -> { },
-                        error -> log.error("{} stream terminated; no message notifications until restart", TOPIC, error));
+    public Function<Flux<Message<byte[]>>, Mono<Void>> messages() {
+        return records -> records.concatMap(this::handle).then();
     }
 
     private Mono<Void> handle(Message<byte[]> record) {

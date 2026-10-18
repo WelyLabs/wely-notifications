@@ -17,14 +17,14 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
-import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * Consumes wely-chat's call events: a ringing call and a missed one become notifications, a ringing
  * call rings the iPhones that registered a PushKit token, and a call that ends stops their ringing.
  *
- * <p>As in wely-chat's consumers, a failing record is dropped inside {@code concatMap}, so it never
- * reaches the subscriber and cancels the stream.
+ * <p>A function returning {@code Mono<Void>}: the binder subscribes. A failing record is dropped inside
+ * {@code concatMap}, so its error never reaches the binder and cancels the stream.
  */
 @Configuration
 @ConditionalOnProperty(name = "app.consumers.enabled", havingValue = "true", matchIfMissing = true)
@@ -50,12 +50,8 @@ public class CallEventsConsumer {
     }
 
     @Bean
-    public Consumer<Flux<Message<byte[]>>> callEvents() {
-        return flux -> flux
-                .concatMap(this::handle)
-                .subscribe(
-                        unused -> { },
-                        error -> log.error("{} stream terminated; no call notifications until restart", TOPIC, error));
+    public Function<Flux<Message<byte[]>>, Mono<Void>> callEvents() {
+        return records -> records.concatMap(this::handle).then();
     }
 
     private Mono<Void> handle(Message<byte[]> record) {

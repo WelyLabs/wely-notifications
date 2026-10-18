@@ -12,6 +12,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.util.List;
@@ -23,6 +24,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -50,7 +52,7 @@ class EventGroupsConsumerTest {
     void eventGroups_shouldApplyTheMembership() {
         when(membershipService.apply(any())).thenReturn(Mono.just(true));
 
-        consumer.eventGroups().accept(Flux.just(group("e1", 3, false)));
+        StepVerifier.create(consumer.eventGroups().apply(Flux.just(group("e1", 3, false)))).verifyComplete();
 
         verify(membershipService, timeout(2000))
                 .apply(new EventMembership("e1", "Bowling", List.of("olivia", "bob"), 3));
@@ -61,7 +63,7 @@ class EventGroupsConsumerTest {
     void eventGroups_shouldEmptyADeletedEvent() {
         when(membershipService.apply(any())).thenReturn(Mono.just(true));
 
-        consumer.eventGroups().accept(Flux.just(group("e1", 4, true)));
+        StepVerifier.create(consumer.eventGroups().apply(Flux.just(group("e1", 4, true)))).verifyComplete();
 
         verify(membershipService, timeout(2000)).apply(new EventMembership("e1", null, List.of(), 4));
     }
@@ -71,8 +73,8 @@ class EventGroupsConsumerTest {
     void eventGroups_shouldDropUnreadableRecords() {
         when(membershipService.apply(any())).thenReturn(Mono.just(true));
 
-        consumer.eventGroups().accept(Flux.just(CallEventsConsumerTest.record("nope"),
-                CallEventsConsumerTest.record("{\"title\":\"x\",\"version\":1,\"deleted\":false}"), group("e2", 1, false)));
+        StepVerifier.create(consumer.eventGroups().apply(Flux.just(CallEventsConsumerTest.record("nope"),
+                CallEventsConsumerTest.record("{\"title\":\"x\",\"version\":1,\"deleted\":false}"), group("e2", 1, false)))).verifyComplete();
 
         verify(membershipService, timeout(2000)).apply(argThat(membership -> "e2".equals(membership.eventId())));
         verify(membershipService, never()).apply(argThat(membership -> membership.eventId() == null));
@@ -90,10 +92,18 @@ class EventGroupsConsumerTest {
         when(membershipService.apply(argThat(membership -> membership != null && "e2".equals(membership.eventId()))))
                 .thenReturn(Mono.just(true));
 
-        consumer.eventGroups().accept(Flux.just(group("e1", 1, false), group("e2", 1, false)));
+        StepVerifier.create(consumer.eventGroups().apply(Flux.just(group("e1", 1, false), group("e2", 1, false)))).verifyComplete();
 
         verify(membershipService, timeout(20_000)).apply(argThat(membership -> membership != null
                 && "e2".equals(membership.eventId())));
         assertThat(attempts.get()).isEqualTo(4);
+    }
+
+    @Test
+    @DisplayName("nothing is read until the binder subscribes to the function's result")
+    void eventGroups_shouldDoNothingUntilTheBinderSubscribes() {
+        consumer.eventGroups().apply(Flux.just(group("e1", 3, false)));
+
+        verifyNoInteractions(membershipService);
     }
 }

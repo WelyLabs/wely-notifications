@@ -13,6 +13,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -23,6 +24,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -45,8 +47,8 @@ class FriendshipsConsumerTest {
     void friendships_shouldNotifyTheRequest() {
         when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
 
-        consumer.friendships().accept(Flux.just(CallEventsConsumerTest.record("""
-                {"type":"REQUESTED","fromUserId":"lea","fromUserName":"Léa","toUserId":"bob"}""")));
+        StepVerifier.create(consumer.friendships().apply(Flux.just(CallEventsConsumerTest.record("""
+                {"type":"REQUESTED","fromUserId":"lea","fromUserName":"Léa","toUserId":"bob"}""")))).verifyComplete();
 
         verify(notificationService, timeout(2000)).notify(Notification.draft("bob", NotificationType.FRIEND_REQUEST,
                 "Demande d'ami", "Léa veut être ton ami", "/friends/lea", null, "lea"));
@@ -55,8 +57,8 @@ class FriendshipsConsumerTest {
     @Test
     @DisplayName("an unknown change notifies nobody")
     void friendships_shouldIgnoreAnUnknownChange() {
-        consumer.friendships().accept(Flux.just(CallEventsConsumerTest.record("""
-                {"type":"BLOCKED","fromUserId":"lea","fromUserName":"Léa","toUserId":"bob"}""")));
+        StepVerifier.create(consumer.friendships().apply(Flux.just(CallEventsConsumerTest.record("""
+                {"type":"BLOCKED","fromUserId":"lea","fromUserName":"Léa","toUserId":"bob"}""")))).verifyComplete();
 
         verify(notificationService, never()).notify(any());
     }
@@ -73,7 +75,7 @@ class FriendshipsConsumerTest {
     void friendships_shouldNotifyAnAcceptance_fromTheFullPayload() {
         when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
 
-        consumer.friendships().accept(Flux.just(CallEventsConsumerTest.record(full("ACCEPTED", "\"FRIEND\"", "null"))));
+        StepVerifier.create(consumer.friendships().apply(Flux.just(CallEventsConsumerTest.record(full("ACCEPTED", "\"FRIEND\"", "null"))))).verifyComplete();
 
         verify(notificationService, timeout(2000)).notify(Notification.draft("lea", NotificationType.FRIEND_ACCEPTED,
                 "Nouvel ami", "Bob a accepté ta demande", "/friends/bob", null, "bob"));
@@ -84,8 +86,8 @@ class FriendshipsConsumerTest {
     void friendships_shouldNotifyAClosenessUpgrade() {
         when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
 
-        consumer.friendships().accept(Flux.just(CallEventsConsumerTest.record(
-                full("CLOSENESS_CHANGED", "\"INTIMATE\"", "\"CLOSE\""))));
+        StepVerifier.create(consumer.friendships().apply(Flux.just(CallEventsConsumerTest.record(
+                full("CLOSENESS_CHANGED", "\"INTIMATE\"", "\"CLOSE\""))))).verifyComplete();
 
         verify(notificationService, timeout(2000)).notify(Notification.draft("lea", NotificationType.CLOSENESS_UPGRADED,
                 "💝 Bob et toi êtes maintenant intimes", "Votre lien passe au niveau supérieur.", "/friends/bob", null,
@@ -100,8 +102,8 @@ class FriendshipsConsumerTest {
                 new RecordReader(JsonMapper.builder().enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).build()));
         when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
 
-        consumer.friendships().accept(Flux.just(CallEventsConsumerTest.record(full("CLOSENESS_CHANGED", "\"CLOSE\"",
-                "\"FRIEND\""))));
+        StepVerifier.create(consumer.friendships().apply(Flux.just(CallEventsConsumerTest.record(full("CLOSENESS_CHANGED", "\"CLOSE\"",
+                "\"FRIEND\""))))).verifyComplete();
 
         verify(notificationService, timeout(2000)).notify(Notification.draft("lea", NotificationType.CLOSENESS_UPGRADED,
                 "🧡 Bob et toi êtes maintenant proches", "Vous partagez désormais un peu plus.", "/friends/bob", null,
@@ -113,7 +115,7 @@ class FriendshipsConsumerTest {
     void friendships_shouldIgnoreEveryTypeButRequestedAcceptedAndUpgrades() {
         when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
 
-        consumer.friendships().accept(Flux.just(
+        StepVerifier.create(consumer.friendships().apply(Flux.just(
                 CallEventsConsumerTest.record(full("SNAPSHOT", "\"CLOSE\"", "null")),
                 CallEventsConsumerTest.record(full("REJECTED", "null", "null")),
                 CallEventsConsumerTest.record(full("CANCELLED", "null", "null")),
@@ -121,7 +123,7 @@ class FriendshipsConsumerTest {
                 CallEventsConsumerTest.record(full("CLOSENESS_CHANGED", "\"FRIEND\"", "\"INTIMATE\"")),
                 CallEventsConsumerTest.record(full("CLOSENESS_CHANGED", "\"CLOSE\"", "\"CLOSE\"")),
                 // Read last: once it is notified, every record before it has been handled.
-                CallEventsConsumerTest.record(full("REQUESTED", "null", "null"))));
+                CallEventsConsumerTest.record(full("REQUESTED", "null", "null"))))).verifyComplete();
 
         verify(notificationService, timeout(2000)).notify(Notification.draft("lea", NotificationType.FRIEND_REQUEST,
                 "Demande d'ami", "Bob veut être ton ami", "/friends/bob", null, "bob"));
@@ -137,9 +139,18 @@ class FriendshipsConsumerTest {
         String accepted = """
                 {"type":"ACCEPTED","fromUserId":"bob","fromUserName":"Bob","toUserId":"lea"}""";
 
-        consumer.friendships().accept(Flux.just(CallEventsConsumerTest.record("{"),
-                CallEventsConsumerTest.record(accepted), CallEventsConsumerTest.record(accepted)));
+        StepVerifier.create(consumer.friendships().apply(Flux.just(CallEventsConsumerTest.record("{"),
+                CallEventsConsumerTest.record(accepted), CallEventsConsumerTest.record(accepted)))).verifyComplete();
 
         verify(notificationService, timeout(2000).times(2)).notify(any());
+    }
+
+    @Test
+    @DisplayName("nothing is read until the binder subscribes to the function's result")
+    void friendships_shouldDoNothingUntilTheBinderSubscribes() {
+        consumer.friendships().apply(Flux.just(CallEventsConsumerTest.record("""
+                {"type":"REQUESTED","fromUserId":"lea","fromUserName":"Léa","toUserId":"bob"}""")));
+
+        verifyNoInteractions(notificationService);
     }
 }

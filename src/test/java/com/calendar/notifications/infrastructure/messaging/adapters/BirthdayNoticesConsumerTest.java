@@ -13,6 +13,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.ZoneId;
@@ -21,6 +22,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -43,10 +45,10 @@ class BirthdayNoticesConsumerTest {
     void birthdayNotices_shouldNotifyTheRecipient() {
         when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
 
-        consumer.birthdayNotices().accept(Flux.just(CallEventsConsumerTest.record("""
+        StepVerifier.create(consumer.birthdayNotices().apply(Flux.just(CallEventsConsumerTest.record("""
                 {"type":"SURPRISE_PROPOSAL","recipientId":"bob","honoreeId":"lea","honoreeName":"Léa",
                  "date":"2027-03-12","daysUntil":14,"closeness":"CLOSE","surpriseEventId":null,
-                 "organizerId":null,"organizerName":null}""")));
+                 "organizerId":null,"organizerName":null}""")))).verifyComplete();
 
         verify(notificationService, timeout(2000)).notify(Notification.draft("bob",
                 NotificationType.BIRTHDAY_SURPRISE_PROPOSAL, "🎁 Léa fête son anniversaire dans 14 jours",
@@ -57,9 +59,9 @@ class BirthdayNoticesConsumerTest {
     @Test
     @DisplayName("an unknown notice notifies nobody")
     void birthdayNotices_shouldIgnoreAnUnknownNotice() {
-        consumer.birthdayNotices().accept(Flux.just(CallEventsConsumerTest.record("""
+        StepVerifier.create(consumer.birthdayNotices().apply(Flux.just(CallEventsConsumerTest.record("""
                 {"type":"BIRTHDAY_FORGOTTEN","recipientId":"bob","honoreeId":"lea","honoreeName":"Léa",
-                 "date":"2027-03-12"}""")));
+                 "date":"2027-03-12"}""")))).verifyComplete();
 
         verify(notificationService, never()).notify(any());
     }
@@ -74,9 +76,19 @@ class BirthdayNoticesConsumerTest {
                 {"type":"FRIEND_BIRTHDAY","recipientId":"bob","honoreeId":"lea","honoreeName":"Léa",
                  "date":"2027-03-12","daysUntil":0,"closeness":"INTIMATE"}""";
 
-        consumer.birthdayNotices().accept(Flux.just(CallEventsConsumerTest.record("{"),
-                CallEventsConsumerTest.record(today), CallEventsConsumerTest.record(today)));
+        StepVerifier.create(consumer.birthdayNotices().apply(Flux.just(CallEventsConsumerTest.record("{"),
+                CallEventsConsumerTest.record(today), CallEventsConsumerTest.record(today)))).verifyComplete();
 
         verify(notificationService, timeout(2000).times(2)).notify(any());
+    }
+
+    @Test
+    @DisplayName("nothing is read until the binder subscribes to the function's result")
+    void birthdayNotices_shouldDoNothingUntilTheBinderSubscribes() {
+        consumer.birthdayNotices().apply(Flux.just(CallEventsConsumerTest.record("""
+                {"type":"SURPRISE_PROPOSAL","recipientId":"bob","honoreeId":"lea","honoreeName":"Léa",
+                 "date":"2027-03-12","daysUntil":14,"closeness":"CLOSE"}""")));
+
+        verifyNoInteractions(notificationService);
     }
 }

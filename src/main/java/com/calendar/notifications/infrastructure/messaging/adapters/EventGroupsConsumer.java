@@ -14,7 +14,7 @@ import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
 
 import java.time.Duration;
-import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * Consumes wely-events' {@code EVENT_GROUP_CHANGED} to keep the event members projection: a date
@@ -44,12 +44,8 @@ public class EventGroupsConsumer {
     }
 
     @Bean
-    public Consumer<Flux<Message<byte[]>>> eventGroups() {
-        return flux -> flux
-                .concatMap(this::handle)
-                .subscribe(
-                        unused -> { },
-                        error -> log.error("{} stream terminated; event members frozen until restart", TOPIC, error));
+    public Function<Flux<Message<byte[]>>, Mono<Void>> eventGroups() {
+        return records -> records.concatMap(this::handle).then();
     }
 
     private Mono<Void> handle(Message<byte[]> record) {
@@ -62,6 +58,10 @@ public class EventGroupsConsumer {
                                     group.eventId(), group.version(), error.getMessage());
                             return Mono.empty();
                         }))
-                .then();
+                .then()
+                .onErrorResume(error -> {
+                    log.error("{} record dropped: {}", TOPIC, error.getMessage());
+                    return Mono.empty();
+                });
     }
 }
