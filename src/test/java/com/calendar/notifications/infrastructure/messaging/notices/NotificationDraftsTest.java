@@ -187,7 +187,9 @@ class NotificationDraftsTest {
     @Test
     @DisplayName("an unknown change or an incomplete record notifies nobody")
     void fromFriendship_shouldIgnoreEverythingElse() {
-        assertThat(drafts.fromFriendship(new FriendshipChangedDTO("REMOVED", "lea", "Léa", "bob"))).isEmpty();
+        for (String type : List.of("SNAPSHOT", "REJECTED", "CANCELLED", "REMOVED", "CLOSENESS_CHANGED")) {
+            assertThat(drafts.fromFriendship(new FriendshipChangedDTO(type, "lea", "Léa", "bob"))).isEmpty();
+        }
         assertThat(drafts.fromFriendship(new FriendshipChangedDTO(null, "lea", "Léa", "bob"))).isEmpty();
         assertThat(drafts.fromFriendship(new FriendshipChangedDTO("REQUESTED", "lea", "Léa", null))).isEmpty();
         assertThat(drafts.fromFriendship(new FriendshipChangedDTO("REQUESTED", null, "Léa", "bob"))).isEmpty();

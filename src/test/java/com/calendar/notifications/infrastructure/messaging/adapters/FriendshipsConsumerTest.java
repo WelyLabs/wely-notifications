@@ -20,6 +20,7 @@ import java.time.ZoneId;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -57,6 +58,43 @@ class FriendshipsConsumerTest {
                 {"type":"BLOCKED","fromUserId":"lea","fromUserName":"Léa","toUserId":"bob"}""")));
 
         verify(notificationService, never()).notify(any());
+    }
+
+    private static String full(String type, String closeness, String previousCloseness) {
+        return """
+                {"type":"%s","fromUserId":"bob","fromUserName":"Bob","toUserId":"lea","closeness":%s,\
+                "previousCloseness":%s,"since":"2026-10-18T09:30:00Z","version":1760779800123,\
+                "occurredAt":"2026-10-18T09:30:00.123Z"}""".formatted(type, closeness, previousCloseness);
+    }
+
+    @Test
+    @DisplayName("the full outbox payload still notifies an acceptance, its new fields ignored")
+    void friendships_shouldNotifyAnAcceptance_fromTheFullPayload() {
+        when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
+
+        consumer.friendships().accept(Flux.just(CallEventsConsumerTest.record(full("ACCEPTED", "\"FRIEND\"", "null"))));
+
+        verify(notificationService, timeout(2000)).notify(Notification.draft("lea", NotificationType.FRIEND_ACCEPTED,
+                "Nouvel ami", "Bob a accepté ta demande", "/friends/bob", null, "bob"));
+    }
+
+    @Test
+    @DisplayName("snapshot, rejection, cancellation, removal and closeness records notify nobody")
+    void friendships_shouldIgnoreEveryTypeButRequestedAndAccepted() {
+        when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
+
+        consumer.friendships().accept(Flux.just(
+                CallEventsConsumerTest.record(full("SNAPSHOT", "\"CLOSE\"", "null")),
+                CallEventsConsumerTest.record(full("REJECTED", "null", "null")),
+                CallEventsConsumerTest.record(full("CANCELLED", "null", "null")),
+                CallEventsConsumerTest.record(full("REMOVED", "null", "\"FRIEND\"")),
+                CallEventsConsumerTest.record(full("CLOSENESS_CHANGED", "\"INTIMATE\"", "\"FRIEND\"")),
+                // Read last: once it is notified, every record before it has been handled.
+                CallEventsConsumerTest.record(full("REQUESTED", "null", "null"))));
+
+        verify(notificationService, timeout(2000)).notify(Notification.draft("lea", NotificationType.FRIEND_REQUEST,
+                "Demande d'ami", "Bob veut être ton ami", "/friends/bob", null, "bob"));
+        verify(notificationService, times(1)).notify(any());
     }
 
     @Test
