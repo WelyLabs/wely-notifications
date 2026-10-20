@@ -5,8 +5,10 @@ import com.calendar.notifications.domain.models.DeletedUsersPage;
 import com.calendar.notifications.domain.models.ReconciliationReport;
 import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.DeletedUsersSource;
-import com.calendar.notifications.exception.NotificationsErrorCode;
-import com.calendar.notifications.exception.NotificationsException;
+import com.calendar.notifications.exception.BusinessErrorCode;
+import com.calendar.notifications.exception.BusinessException;
+import com.calendar.notifications.exception.TechnicalErrorCode;
+import com.calendar.notifications.exception.TechnicalException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -201,11 +203,23 @@ class AccountReconciliationServiceTest {
     void reconcile_shouldCountAFailedErasure_andCarryOnWithTheNextTombstone() {
         onePage(new DeletedUser("alice", LONG_AGO), new DeletedUser("bob", LONG_AGO));
         erasedHere();
-        when(erasure.erase("alice", LONG_AGO)).thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+        when(erasure.erase("alice", LONG_AGO)).thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
         when(erasure.erase("bob", LONG_AGO)).thenReturn(Mono.empty());
 
         StepVerifier.create(service.reconcile())
                 .expectNext(new ReconciliationReport(2, 1, 1))
+                .verifyComplete();
+    }
+
+    @Test
+    void reconcile_shouldCountAFailedErasure_whenTheErasureIsRefused() {
+        onePage(new DeletedUser("alice", LONG_AGO));
+        erasedHere();
+        when(erasure.erase("alice", LONG_AGO))
+                .thenReturn(Mono.error(new BusinessException(BusinessErrorCode.ACCOUNT_DELETED)));
+
+        StepVerifier.create(service.reconcile())
+                .expectNext(new ReconciliationReport(1, 0, 1))
                 .verifyComplete();
     }
 
@@ -223,11 +237,11 @@ class AccountReconciliationServiceTest {
 
     @Test
     void reconcile_shouldFail_whenTheSourceIsUnavailable() {
-        when(source.page(null, PAGE_SIZE)).thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.USERS_UNAVAILABLE)));
+        when(source.page(null, PAGE_SIZE)).thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.USERS_UNAVAILABLE)));
 
         StepVerifier.create(service.reconcile())
-                .expectErrorMatches(error -> error instanceof NotificationsException failure
-                        && failure.getErrorCode() == NotificationsErrorCode.USERS_UNAVAILABLE)
+                .expectErrorMatches(error -> error instanceof TechnicalException failure
+                        && failure.getErrorCode() == TechnicalErrorCode.USERS_UNAVAILABLE)
                 .verify();
 
         verifyNoInteractions(markers, erasure);
@@ -237,11 +251,11 @@ class AccountReconciliationServiceTest {
     @DisplayName("a later page failing fails the pass; the erasures already applied stay, being idempotent")
     void reconcile_shouldFail_whenALaterPageIsUnavailable() {
         when(source.page(null, PAGE_SIZE)).thenReturn(Mono.just(page("c1", new DeletedUser("alice", LONG_AGO))));
-        when(source.page("c1", PAGE_SIZE)).thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.USERS_UNAVAILABLE)));
+        when(source.page("c1", PAGE_SIZE)).thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.USERS_UNAVAILABLE)));
         erasedHere();
         when(erasure.erase("alice", LONG_AGO)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.reconcile()).expectError(NotificationsException.class).verify();
+        StepVerifier.create(service.reconcile()).expectError(TechnicalException.class).verify();
 
         verify(erasure).erase("alice", LONG_AGO);
     }
@@ -250,11 +264,11 @@ class AccountReconciliationServiceTest {
     void reconcile_shouldFail_whenTheMarkersCannotBeRead() {
         onePage(new DeletedUser("alice", LONG_AGO));
         when(markers.erasedAmong(anyCollection()))
-                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+                .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
 
         StepVerifier.create(service.reconcile())
-                .expectErrorMatches(error -> error instanceof NotificationsException failure
-                        && failure.getErrorCode() == NotificationsErrorCode.STORE_UNAVAILABLE)
+                .expectErrorMatches(error -> error instanceof TechnicalException failure
+                        && failure.getErrorCode() == TechnicalErrorCode.STORE_UNAVAILABLE)
                 .verify();
 
         verifyNoInteractions(erasure);

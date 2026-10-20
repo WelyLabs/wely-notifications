@@ -1,5 +1,6 @@
 package com.calendar.notifications.exception;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -17,23 +18,69 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/** Turns every failure into an RFC 7807 problem response, with the stable {@code code} a client branches on. */
+/**
+ * Turns every failure into an RFC 7807 problem response, with the stable {@code code} a client branches on.
+ *
+ * <p>Two properties are added beyond the standard fields: {@code code}, the stable identifier a
+ * client branches on, and {@code timestamp}, to correlate with logs. A third, {@code requestId},
+ * is the WebFlux request id: the same one that prefixes the framework's log lines, and the one
+ * every log line here carries, so a response leads straight to its logs.
+ */
 @RestControllerAdvice
 public class GlobalErrorHandler {
+
+    /** Bean Validation rejections; not in {@link BusinessErrorCode} because the fields vary per request. */
+    public static final String VALIDATION_FAILED_CODE = "NTF-VAL-001";
+
+    /** A status the framework decided itself (404, 405, unreadable body...). */
+    public static final String REQUEST_REFUSED_CODE = "NTF-REQ-000";
+
+    /** The catch-all: a failure nothing above recognised. */
+    public static final String UNEXPECTED_ERROR_CODE = "NTF-TEC-000";
+
+    /** Exposed to Prometheus as {@code wely_errors_technical_total}. */
+    public static final String TECHNICAL_ERRORS_METRIC = "wely.errors.technical";
+
+    /** Tag carrying the error code on {@link #TECHNICAL_ERRORS_METRIC}. */
+    public static final String CODE_TAG = "code";
 
     private static final Logger log = LoggerFactory.getLogger(GlobalErrorHandler.class);
 
     /** Namespace for the {@code type} URI. Not dereferenced; it identifies, it does not serve. */
     private static final String PROBLEM_TYPE_BASE = "https://welylabs.app/problems/";
 
+    private final MeterRegistry meterRegistry;
+
+    public GlobalErrorHandler(MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
+    }
+
     /** Sets problem+json itself, so the SSE route does not write the problem as an event. */
-    @ExceptionHandler(NotificationsException.class)
-    public ResponseEntity<ProblemDetail> handleNotificationsException(NotificationsException ex,
-                                                                      ServerWebExchange exchange) {
-        NotificationsErrorCode error = ex.getErrorCode();
+    @ExceptionHandler(BusinessException.class)
+    public ResponseEntity<ProblemDetail> handleBusinessException(BusinessException ex,
+                                                                 ServerWebExchange exchange) {
+        BusinessErrorCode error = ex.getErrorCode();
 
         // Expected outcome, not an incident: logged at WARN, and without a stack trace.
-        log.warn("Business failure {} on {}", error.getCode(), exchange.getRequest().getPath());
+        log.warn("Business failure {} on {} (request {})", error.getCode(), exchange.getRequest().getPath(),
+                requestId(exchange));
+
+        return ResponseEntity.status(error.getHttpStatus())
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(problem(error.getHttpStatus(), error.getCode(), error.getTitle(), error.getDetail(), exchange));
+    }
+
+    /** Sets problem+json itself too: the store can fail while the SSE route opens its stream. */
+    @ExceptionHandler(TechnicalException.class)
+    public ResponseEntity<ProblemDetail> handleTechnicalException(TechnicalException ex,
+                                                                  ServerWebExchange exchange) {
+        TechnicalErrorCode error = ex.getErrorCode();
+
+        // A dependency is down: ERROR with the cause, because someone has to act on it.
+        // The previous version logged these at WARN, which hid them.
+        log.error("Technical failure {} on {} (request {})", error.getCode(), exchange.getRequest().getPath(),
+                requestId(exchange), ex);
+        countTechnicalFailure(error.getCode());
 
         return ResponseEntity.status(error.getHttpStatus())
                 .contentType(MediaType.APPLICATION_PROBLEM_JSON)
@@ -48,7 +95,11 @@ public class GlobalErrorHandler {
         ex.getBindingResult().getFieldErrors()
                 .forEach(error -> fieldErrors.put(error.getField(), error.getDefaultMessage()));
 
-        ProblemDetail problem = problem(HttpStatus.BAD_REQUEST, "NTF-VAL-001",
+        // A refused request like a business failure: WARN, without a stack trace.
+        log.warn("Validation failure {} on {} (request {})", VALIDATION_FAILED_CODE, exchange.getRequest().getPath(),
+                requestId(exchange));
+
+        ProblemDetail problem = problem(HttpStatus.BAD_REQUEST, VALIDATION_FAILED_CODE,
                 "Invalid request", "One or more fields are invalid.", exchange);
         problem.setProperty("errors", fieldErrors);
 
@@ -68,23 +119,34 @@ public class GlobalErrorHandler {
     public ProblemDetail handleResponseStatusException(ResponseStatusException ex,
                                                        ServerWebExchange exchange) {
         HttpStatus status = HttpStatus.valueOf(ex.getStatusCode().value());
-        log.debug("{} on {}", status, exchange.getRequest().getPath());
+        log.debug("{} on {} (request {})", status, exchange.getRequest().getPath(), requestId(exchange));
 
-        return problem(status, "NTF-REQ-000", status.getReasonPhrase(),
+        return problem(status, REQUEST_REFUSED_CODE, status.getReasonPhrase(),
                 "The request could not be served as sent.", exchange);
     }
 
     /**
      * Last resort. The detail is deliberately generic: an exception message can carry a
      * query, a constraint name or a host, and none of that belongs in a response. The real
-     * message goes to the logs, where the timestamp ties the two together.
+     * message goes to the logs, where the request id ties the two together.
      */
     @ExceptionHandler(Exception.class)
     public ProblemDetail handleUnexpectedException(Exception ex, ServerWebExchange exchange) {
-        log.error("Unhandled failure on {}", exchange.getRequest().getPath(), ex);
+        log.error("Unhandled failure {} on {} (request {})", UNEXPECTED_ERROR_CODE, exchange.getRequest().getPath(),
+                requestId(exchange), ex);
+        countTechnicalFailure(UNEXPECTED_ERROR_CODE);
 
-        return problem(HttpStatus.INTERNAL_SERVER_ERROR, "NTF-TEC-000",
+        return problem(HttpStatus.INTERNAL_SERVER_ERROR, UNEXPECTED_ERROR_CODE,
                 "Unexpected error", "The request could not be completed.", exchange);
+    }
+
+    // Counted per code, so an alert can tell a store outage from an unreachable wely-users.
+    private void countTechnicalFailure(String code) {
+        meterRegistry.counter(TECHNICAL_ERRORS_METRIC, CODE_TAG, code).increment();
+    }
+
+    private static String requestId(ServerWebExchange exchange) {
+        return exchange.getRequest().getId();
     }
 
     private ProblemDetail problem(HttpStatus status, String code, String title, String detail,
@@ -95,6 +157,7 @@ public class GlobalErrorHandler {
         problem.setInstance(URI.create(exchange.getRequest().getPath().value()));
         problem.setProperty("code", code);
         problem.setProperty("timestamp", Instant.now().toString());
+        problem.setProperty("requestId", requestId(exchange));
 
         return problem;
     }

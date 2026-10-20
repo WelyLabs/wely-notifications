@@ -1,7 +1,8 @@
 package com.calendar.notifications.infrastructure.reconciliation;
 
 import com.calendar.notifications.domain.services.AccountReconciliationService;
-import com.calendar.notifications.exception.NotificationsException;
+import com.calendar.notifications.exception.BusinessException;
+import com.calendar.notifications.exception.TechnicalException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -81,13 +82,23 @@ public class DeletedUsersReconciliationLoop implements SmartLifecycle {
                 })
                 .switchIfEmpty(Mono.error(() -> new IllegalStateException("Reconciliation pass completed empty")))
                 .onErrorResume(error -> {
-                    if (error instanceof NotificationsException known) {
+                    String code = codeOf(error);
+                    if (code != null) {
                         log.warn("Deleted-users reconciliation failed; next pass in {}: {} {}", retryInterval,
-                                known.getErrorCode().getCode(), known.getMessage());
+                                code, error.getMessage());
                     } else {
                         log.warn("Deleted-users reconciliation failed; next pass in {}", retryInterval, error);
                     }
                     return Mono.just(retryInterval);
                 });
+    }
+
+    // A failure this service already named is logged by its code; anything else keeps its stack trace.
+    private static String codeOf(Throwable error) {
+        return switch (error) {
+            case TechnicalException known -> known.getErrorCode().getCode();
+            case BusinessException known -> known.getErrorCode().getCode();
+            default -> null;
+        };
     }
 }

@@ -3,8 +3,8 @@ package com.calendar.notifications.infrastructure.users.adapters;
 import com.calendar.notifications.configuration.UsersApiClientConfig;
 import com.calendar.notifications.domain.models.DeletedUser;
 import com.calendar.notifications.domain.models.DeletedUsersPage;
-import com.calendar.notifications.exception.NotificationsErrorCode;
-import com.calendar.notifications.exception.NotificationsException;
+import com.calendar.notifications.exception.TechnicalErrorCode;
+import com.calendar.notifications.exception.TechnicalException;
 import com.calendar.notifications.infrastructure.users.mappers.DeletedUsersMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -19,6 +19,7 @@ import org.springframework.web.reactive.function.client.ClientRequest;
 import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.ExchangeFunction;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -26,6 +27,7 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -68,7 +70,7 @@ class UsersApiDeletedUsersAdapterTest {
     }
 
     private static boolean usersUnavailable(Throwable error) {
-        return error instanceof NotificationsException failure && failure.getErrorCode() == NotificationsErrorCode.USERS_UNAVAILABLE;
+        return error instanceof TechnicalException failure && failure.getErrorCode() == TechnicalErrorCode.USERS_UNAVAILABLE;
     }
 
     @Test
@@ -125,7 +127,10 @@ class UsersApiDeletedUsersAdapterTest {
     @DisplayName("a blank URL fails at once: no request goes out")
     void page_shouldFailWithoutCalling_whenTheUrlIsNotSet() {
         StepVerifier.create(adapter("", SECRET).page(null, 500))
-                .expectErrorMatches(UsersApiDeletedUsersAdapterTest::usersUnavailable)
+                .expectErrorSatisfies(error -> {
+                    assertThat(usersUnavailable(error)).isTrue();
+                    assertThat(error.getCause()).as("nothing failed underneath: the adapter is not configured").isNull();
+                })
                 .verify();
 
         assertThat(sent).isEmpty();
@@ -147,7 +152,11 @@ class UsersApiDeletedUsersAdapterTest {
         answer = () -> Mono.just(json(HttpStatus.valueOf(status), "{\"code\":\"USR-BUS-013\"}"));
 
         StepVerifier.create(adapter().page("c1", 500))
-                .expectErrorMatches(UsersApiDeletedUsersAdapterTest::usersUnavailable)
+                .expectErrorSatisfies(error -> {
+                    assertThat(usersUnavailable(error)).isTrue();
+                    assertThat(error.getCause()).isInstanceOfSatisfying(WebClientResponseException.class,
+                            cause -> assertThat(cause.getStatusCode().value()).isEqualTo(status));
+                })
                 .verify();
     }
 
@@ -191,10 +200,15 @@ class UsersApiDeletedUsersAdapterTest {
 
     @Test
     void page_shouldFailWithUsersUnavailable_whenWelyUsersCannotBeReached() {
-        answer = () -> Mono.error(new IOException("Connection refused"));
+        IOException refused = new IOException("Connection refused");
+        answer = () -> Mono.error(refused);
 
         StepVerifier.create(adapter().page(null, 500))
-                .expectErrorMatches(UsersApiDeletedUsersAdapterTest::usersUnavailable)
+                .expectErrorSatisfies(error -> {
+                    assertThat(usersUnavailable(error)).isTrue();
+                    assertThat(error.getCause()).as("the client's failure is kept for the logs").isNotNull();
+                    assertThat(error).rootCause().isSameAs(refused);
+                })
                 .verify();
     }
 
@@ -206,7 +220,10 @@ class UsersApiDeletedUsersAdapterTest {
         StepVerifier.withVirtualTime(() -> adapter.page(null, 500))
                 .expectSubscription()
                 .thenAwait(UsersApiDeletedUsersAdapter.TIMEOUT)
-                .expectErrorMatches(UsersApiDeletedUsersAdapterTest::usersUnavailable)
+                .expectErrorSatisfies(error -> {
+                    assertThat(usersUnavailable(error)).isTrue();
+                    assertThat(error.getCause()).isInstanceOf(TimeoutException.class);
+                })
                 .verify();
     }
 }

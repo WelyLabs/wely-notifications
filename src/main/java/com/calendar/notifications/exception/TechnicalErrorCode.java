@@ -2,26 +2,14 @@ package com.calendar.notifications.exception;
 
 import org.springframework.http.HttpStatus;
 
-/** Outcomes this service refuses on, each with the stable code a client branches on. */
-public enum NotificationsErrorCode {
-
-    SUBSCRIPTION_INVALID(
-            "NTF-BUS-001",
-            "Push subscription invalid",
-            "The endpoint must be an https URL, p256dh a P-256 public key and auth a 16-byte secret, base64url-encoded.",
-            HttpStatus.BAD_REQUEST),
-
-    ACCOUNT_DELETED(
-            "NTF-BUS-002",
-            "Account deleted",
-            "This account has been deleted.",
-            HttpStatus.GONE),
-
-    APNS_DEVICE_INVALID(
-            "NTF-VAL-002",
-            "APNs device invalid",
-            "The token must be the device's APNs token in hex, 64 to 200 characters, and environment SANDBOX or PRODUCTION.",
-            HttpStatus.BAD_REQUEST),
+/**
+ * Failures of a dependency rather than of the request.
+ *
+ * <p>Each names which dependency broke, so an incident can be routed without reading the
+ * logs. All of them answer 502 rather than 500: the request was valid and this service is
+ * running — something it depends on is not, and 502 says exactly that.
+ */
+public enum TechnicalErrorCode {
 
     STORE_UNAVAILABLE(
             "NTF-TEC-001",
@@ -41,7 +29,7 @@ public enum NotificationsErrorCode {
     private final String detail;
     private final HttpStatus httpStatus;
 
-    NotificationsErrorCode(String code, String title, String detail, HttpStatus httpStatus) {
+    TechnicalErrorCode(String code, String title, String detail, HttpStatus httpStatus) {
         this.code = code;
         this.title = title;
         this.detail = detail;

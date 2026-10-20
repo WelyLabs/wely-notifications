@@ -2,8 +2,9 @@ package com.calendar.notifications.infrastructure.users.adapters;
 
 import com.calendar.notifications.domain.models.DeletedUsersPage;
 import com.calendar.notifications.domain.ports.DeletedUsersSource;
-import com.calendar.notifications.exception.NotificationsErrorCode;
-import com.calendar.notifications.exception.NotificationsException;
+import com.calendar.notifications.exception.BusinessException;
+import com.calendar.notifications.exception.TechnicalErrorCode;
+import com.calendar.notifications.exception.TechnicalException;
 import com.calendar.notifications.infrastructure.users.mappers.DeletedUsersMapper;
 import com.calendar.notifications.infrastructure.users.models.DeletedUsersPageResponse;
 import org.slf4j.Logger;
@@ -43,7 +44,7 @@ public class UsersApiDeletedUsersAdapter implements DeletedUsersSource {
     public Mono<DeletedUsersPage> page(String after, int limit) {
         if (!configured) {
             log.warn("Deleted accounts not listed: USERS_API_URL or DELETED_USERS_READER_SECRET is not set");
-            return Mono.error(new NotificationsException(NotificationsErrorCode.USERS_UNAVAILABLE));
+            return Mono.error(new TechnicalException(TechnicalErrorCode.USERS_UNAVAILABLE));
         }
         return Mono.defer(() -> client.get()
                         .uri(uri -> {
@@ -62,12 +63,13 @@ public class UsersApiDeletedUsersAdapter implements DeletedUsersSource {
     }
 
     // The error names the status and the URL, never the secret header.
-    private static NotificationsException unavailable(Throwable error) {
+    private static TechnicalException unavailable(Throwable error) {
         log.warn("Deleted accounts not listed from wely-users: {}", error.toString());
-        return new NotificationsException(NotificationsErrorCode.USERS_UNAVAILABLE, error);
+        return new TechnicalException(TechnicalErrorCode.USERS_UNAVAILABLE, error);
     }
 
+    // Already translated failures pass through untouched, whichever kind they are.
     private static boolean isUnexpected(Throwable error) {
-        return !(error instanceof NotificationsException);
+        return !(error instanceof BusinessException || error instanceof TechnicalException);
     }
 }

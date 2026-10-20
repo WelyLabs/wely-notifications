@@ -5,8 +5,8 @@ import com.calendar.notifications.application.mappers.PreferencesRestMapper;
 import com.calendar.notifications.domain.models.NotificationCategory;
 import com.calendar.notifications.domain.models.NotificationPreferences;
 import com.calendar.notifications.domain.services.PushService;
-import com.calendar.notifications.exception.NotificationsErrorCode;
-import com.calendar.notifications.exception.NotificationsException;
+import com.calendar.notifications.exception.BusinessErrorCode;
+import com.calendar.notifications.exception.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -65,11 +65,11 @@ class PreferencesControllerTest {
     @DisplayName("a deleted account's refusal reaches the advice unchanged")
     void update_shouldPropagateTheRefusal_whenTheAccountIsErased() {
         when(pushService.updatePreferences(eq("bob"), any()))
-                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.ACCOUNT_DELETED)));
+                .thenReturn(Mono.error(new BusinessException(BusinessErrorCode.ACCOUNT_DELETED)));
 
         StepVerifier.create(controller.update(jwt, new PreferencesDTO(true, true, true, true, true)))
-                .expectErrorSatisfies(error -> assertThat(((NotificationsException) error).getErrorCode())
-                        .isEqualTo(NotificationsErrorCode.ACCOUNT_DELETED))
+                .expectErrorSatisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo(BusinessErrorCode.ACCOUNT_DELETED))
                 .verify();
     }
 }

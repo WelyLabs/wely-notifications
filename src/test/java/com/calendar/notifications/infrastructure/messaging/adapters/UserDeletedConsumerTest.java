@@ -1,8 +1,8 @@
 package com.calendar.notifications.infrastructure.messaging.adapters;
 
 import com.calendar.notifications.domain.services.AccountErasureService;
-import com.calendar.notifications.exception.NotificationsErrorCode;
-import com.calendar.notifications.exception.NotificationsException;
+import com.calendar.notifications.exception.TechnicalErrorCode;
+import com.calendar.notifications.exception.TechnicalException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -45,8 +45,8 @@ class UserDeletedConsumerTest {
         userDeleted = new UserDeletedConsumer(erasure, new RecordReader(JsonMapper.builder().build())).userDeleted();
     }
 
-    private static NotificationsException storeDown() {
-        return new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE);
+    private static TechnicalException storeDown() {
+        return new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE);
     }
 
     @Test

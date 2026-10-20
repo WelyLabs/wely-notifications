@@ -9,8 +9,10 @@ import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.LiveNotifications;
 import com.calendar.notifications.domain.ports.NotificationRepository;
 import com.calendar.notifications.domain.ports.NotificationWording;
-import com.calendar.notifications.exception.NotificationsErrorCode;
-import com.calendar.notifications.exception.NotificationsException;
+import com.calendar.notifications.exception.BusinessErrorCode;
+import com.calendar.notifications.exception.BusinessException;
+import com.calendar.notifications.exception.TechnicalErrorCode;
+import com.calendar.notifications.exception.TechnicalException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -130,10 +132,10 @@ class NotificationServiceTest {
     void notify_shouldFailWithoutStreamingOrPushing_whenTheStoreFails() {
         deleted();
         when(repository.insert(any()))
-                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+                .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
 
         StepVerifier.create(service.notify(friendRequest()))
-                .expectError(NotificationsException.class)
+                .expectError(TechnicalException.class)
                 .verify();
 
         verifyNoInteractions(live, pushService);
@@ -179,9 +181,9 @@ class NotificationServiceTest {
     @DisplayName("markers that cannot be read fail the notification before anything is written")
     void notify_shouldFail_whenTheMarkersCannotBeRead() {
         when(markers.anyDeleted(any()))
-                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+                .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
 
-        StepVerifier.create(service.notify(friendRequest())).expectError(NotificationsException.class).verify();
+        StepVerifier.create(service.notify(friendRequest())).expectError(TechnicalException.class).verify();
 
         verifyNoInteractions(repository, live, pushService);
     }
@@ -256,10 +258,10 @@ class NotificationServiceTest {
     @DisplayName("a failed mark streams no count and reports the failure")
     void markAllRead_shouldFail_whenTheStoreFails() {
         when(repository.markAllRead("bob", NOW))
-                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+                .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
         when(repository.countUnread("bob")).thenReturn(Mono.just(0L));
 
-        StepVerifier.create(service.markAllRead("bob")).expectError(NotificationsException.class).verify();
+        StepVerifier.create(service.markAllRead("bob")).expectError(TechnicalException.class).verify();
 
         verifyNoInteractions(live);
     }
@@ -305,8 +307,8 @@ class NotificationServiceTest {
         deleted("bob");
 
         StepVerifier.create(service.openStream("bob"))
-                .expectErrorSatisfies(error -> assertThat(((NotificationsException) error).getErrorCode())
-                        .isEqualTo(NotificationsErrorCode.ACCOUNT_DELETED))
+                .expectErrorSatisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo(BusinessErrorCode.ACCOUNT_DELETED))
                 .verify();
 
         verifyNoInteractions(live, repository);

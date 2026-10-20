@@ -19,8 +19,10 @@ import com.calendar.notifications.domain.ports.NativePushSender;
 import com.calendar.notifications.domain.ports.PreferencesRepository;
 import com.calendar.notifications.domain.ports.PushSender;
 import com.calendar.notifications.domain.ports.SubscriptionRepository;
-import com.calendar.notifications.exception.NotificationsErrorCode;
-import com.calendar.notifications.exception.NotificationsException;
+import com.calendar.notifications.exception.BusinessErrorCode;
+import com.calendar.notifications.exception.BusinessException;
+import com.calendar.notifications.exception.TechnicalErrorCode;
+import com.calendar.notifications.exception.TechnicalException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -78,8 +80,8 @@ class PushServiceTest {
     }
 
     private static boolean accountDeleted(Throwable error) {
-        return error instanceof NotificationsException refused
-                && refused.getErrorCode() == NotificationsErrorCode.ACCOUNT_DELETED;
+        return error instanceof BusinessException refused
+                && refused.getErrorCode() == BusinessErrorCode.ACCOUNT_DELETED;
     }
 
     private static PushSubscription device(String endpoint) {
@@ -167,11 +169,11 @@ class PushServiceTest {
         when(markers.anyDeleted(List.of("bob"))).thenReturn(Mono.just(false), Mono.just(true));
         when(subscriptions.save(any())).thenReturn(Mono.empty());
         when(subscriptions.deleteOwned("bob", "https://push.example/1"))
-                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+                .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
 
         StepVerifier.create(service.subscribe("bob", device("https://push.example/1")))
-                .expectErrorSatisfies(error -> assertThat(((NotificationsException) error).getErrorCode())
-                        .isEqualTo(NotificationsErrorCode.STORE_UNAVAILABLE))
+                .expectErrorSatisfies(error -> assertThat(((TechnicalException) error).getErrorCode())
+                        .isEqualTo(TechnicalErrorCode.STORE_UNAVAILABLE))
                 .verify();
     }
 
@@ -181,8 +183,8 @@ class PushServiceTest {
         PushSubscription sent = new PushSubscription(null, "http://push.example/1", P256DH, AUTH, null, null);
 
         StepVerifier.create(service.subscribe("bob", sent))
-                .expectErrorSatisfies(error -> assertThat(((NotificationsException) error).getErrorCode())
-                        .isEqualTo(NotificationsErrorCode.SUBSCRIPTION_INVALID))
+                .expectErrorSatisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo(BusinessErrorCode.SUBSCRIPTION_INVALID))
                 .verify();
 
         verifyNoInteractions(subscriptions, markers);
@@ -332,7 +334,7 @@ class PushServiceTest {
     void deliver_shouldSwallowAStoreFailure() {
         when(sender.enabled()).thenReturn(true);
         when(preferences.find("bob"))
-                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+                .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
 
         StepVerifier.create(service.deliver(message())).verifyComplete();
     }
@@ -382,8 +384,8 @@ class PushServiceTest {
     @DisplayName("a token APNs would refuse answers 400 NTF-VAL-002, before anything is read or written")
     void registerDevice_shouldRejectAMalformedToken() {
         StepVerifier.create(service.registerDevice("bob", iphone("not-hex")))
-                .expectErrorSatisfies(error -> assertThat(((NotificationsException) error).getErrorCode())
-                        .isEqualTo(NotificationsErrorCode.APNS_DEVICE_INVALID))
+                .expectErrorSatisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo(BusinessErrorCode.APNS_DEVICE_INVALID))
                 .verify();
 
         verifyNoInteractions(apnsDevices, markers);
@@ -394,11 +396,11 @@ class PushServiceTest {
     void registerDevice_shouldFail_whenTheStoreFails() {
         when(markers.anyDeleted(List.of("bob"))).thenReturn(Mono.just(false));
         when(apnsDevices.save(any()))
-                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+                .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
 
         StepVerifier.create(service.registerDevice("bob", iphone(TOKEN)))
-                .expectErrorSatisfies(error -> assertThat(((NotificationsException) error).getErrorCode())
-                        .isEqualTo(NotificationsErrorCode.STORE_UNAVAILABLE))
+                .expectErrorSatisfies(error -> assertThat(((TechnicalException) error).getErrorCode())
+                        .isEqualTo(TechnicalErrorCode.STORE_UNAVAILABLE))
                 .verify();
     }
 
@@ -480,7 +482,7 @@ class PushServiceTest {
         when(nativeSender.enabled()).thenReturn(true);
         when(preferences.find("bob")).thenReturn(Mono.empty());
         when(apnsDevices.findByUser("bob"))
-                .thenReturn(Flux.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+                .thenReturn(Flux.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
         when(subscriptions.findByUser("bob")).thenReturn(Flux.just(device("https://a/1")));
         when(sender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
 
@@ -496,7 +498,7 @@ class PushServiceTest {
         when(nativeSender.enabled()).thenReturn(true);
         when(preferences.find("bob")).thenReturn(Mono.empty());
         when(subscriptions.findByUser("bob"))
-                .thenReturn(Flux.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+                .thenReturn(Flux.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
         when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(iphone(TOKEN)));
         when(nativeSender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
 
@@ -663,7 +665,7 @@ class PushServiceTest {
         when(nativeSender.enabled()).thenReturn(true);
         when(preferences.find("bob")).thenReturn(Mono.empty());
         when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(pushKit(VOIP_TOKEN)),
-                Flux.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+                Flux.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
         when(nativeSender.sendVoip(any(), any())).thenReturn(Mono.just(PushResult.GONE));
         when(apnsDevices.delete(VOIP_TOKEN)).thenReturn(Mono.empty());
 

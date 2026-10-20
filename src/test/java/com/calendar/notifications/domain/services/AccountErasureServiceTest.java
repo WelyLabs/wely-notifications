@@ -6,8 +6,8 @@ import com.calendar.notifications.domain.ports.LiveNotifications;
 import com.calendar.notifications.domain.ports.NotificationRepository;
 import com.calendar.notifications.domain.ports.PreferencesRepository;
 import com.calendar.notifications.domain.ports.SubscriptionRepository;
-import com.calendar.notifications.exception.NotificationsErrorCode;
-import com.calendar.notifications.exception.NotificationsException;
+import com.calendar.notifications.exception.TechnicalErrorCode;
+import com.calendar.notifications.exception.TechnicalException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -125,7 +125,7 @@ class AccountErasureServiceTest {
     void erase_shouldStillStampErasedAt_whenAnUnreadCountCannotBeAnnounced() {
         everyStepSucceeds(Set.of("bob", "carl"));
         when(notificationService.announceUnreadCount("bob"))
-                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+                .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
         when(notificationService.announceUnreadCount("carl")).thenReturn(Mono.empty());
 
         StepVerifier.create(service.erase("lea", DELETED_AT)).verifyComplete();
@@ -141,9 +141,9 @@ class AccountErasureServiceTest {
         when(subscriptions.deleteByUser("lea")).thenReturn(Mono.empty());
         when(apnsDevices.deleteByUser("lea")).thenReturn(Mono.empty());
         when(preferences.delete("lea"))
-                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+                .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
 
-        StepVerifier.create(service.erase("lea", DELETED_AT)).expectError(NotificationsException.class).verify();
+        StepVerifier.create(service.erase("lea", DELETED_AT)).expectError(TechnicalException.class).verify();
 
         verify(notifications, never()).deleteByRecipient(any());
         verify(notifications, never()).deleteByActor(any());
@@ -156,9 +156,9 @@ class AccountErasureServiceTest {
         when(markers.markDeleted(any(), any())).thenReturn(Mono.empty());
         when(subscriptions.deleteByUser("lea")).thenReturn(Mono.empty());
         when(apnsDevices.deleteByUser("lea"))
-                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+                .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
 
-        StepVerifier.create(service.erase("lea", DELETED_AT)).expectError(NotificationsException.class).verify();
+        StepVerifier.create(service.erase("lea", DELETED_AT)).expectError(TechnicalException.class).verify();
 
         verify(preferences, never()).delete(any());
         verify(markers, never()).markErased(any(), any());
@@ -168,9 +168,9 @@ class AccountErasureServiceTest {
     @DisplayName("a marker that cannot be written fails the erasure before anything is closed or deleted")
     void erase_shouldDeleteNothing_whenTheMarkerCannotBeWritten() {
         when(markers.markDeleted("lea", DELETED_AT))
-                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE)));
+                .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
 
-        StepVerifier.create(service.erase("lea", DELETED_AT)).expectError(NotificationsException.class).verify();
+        StepVerifier.create(service.erase("lea", DELETED_AT)).expectError(TechnicalException.class).verify();
 
         verifyNoInteractions(live, subscriptions, apnsDevices, preferences, notifications, notificationService);
         verify(markers, never()).markErased(any(), any());

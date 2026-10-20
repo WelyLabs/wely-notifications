@@ -2,8 +2,8 @@ package com.calendar.notifications.infrastructure.persistence.adapters;
 
 import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.models.NotificationType;
-import com.calendar.notifications.exception.NotificationsErrorCode;
-import com.calendar.notifications.exception.NotificationsException;
+import com.calendar.notifications.exception.TechnicalErrorCode;
+import com.calendar.notifications.exception.TechnicalException;
 import com.calendar.notifications.infrastructure.persistence.entities.NotificationEntity;
 import com.calendar.notifications.infrastructure.persistence.mappers.NotificationPersistenceMapper;
 import com.calendar.notifications.infrastructure.persistence.projections.NotificationRecipient;
@@ -16,6 +16,7 @@ import org.mapstruct.factory.Mappers;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Limit;
@@ -221,8 +222,11 @@ class MongoNotificationRepositoryAdapterTest {
     static void assertStoreUnavailable(Mono<?> call) {
         StepVerifier.create(call)
                 .expectErrorSatisfies(error -> assertThat(error)
-                        .isInstanceOfSatisfying(NotificationsException.class, failure ->
-                                assertThat(failure.getErrorCode()).isEqualTo(NotificationsErrorCode.STORE_UNAVAILABLE)))
+                        .isInstanceOfSatisfying(TechnicalException.class, failure -> {
+                            assertThat(failure.getErrorCode()).isEqualTo(TechnicalErrorCode.STORE_UNAVAILABLE);
+                            // The driver's failure stays attached, so the ERROR log shows what actually broke.
+                            assertThat(failure.getCause()).isInstanceOf(DataAccessException.class);
+                        }))
                 .verify();
     }
 }

@@ -8,8 +8,10 @@ import com.calendar.notifications.domain.models.LiveUpdate;
 import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.models.NotificationType;
 import com.calendar.notifications.domain.services.NotificationService;
-import com.calendar.notifications.exception.NotificationsErrorCode;
-import com.calendar.notifications.exception.NotificationsException;
+import com.calendar.notifications.exception.BusinessErrorCode;
+import com.calendar.notifications.exception.BusinessException;
+import com.calendar.notifications.exception.TechnicalErrorCode;
+import com.calendar.notifications.exception.TechnicalException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -132,10 +134,10 @@ class NotificationControllerTest {
     @DisplayName("the response ends with the error when the updates fail")
     void stream_shouldEndTheResponseWithTheError_whenTheUpdatesFail() {
         when(notificationService.openStream("bob"))
-                .thenReturn(Mono.just(Flux.error(new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE))));
+                .thenReturn(Mono.just(Flux.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE))));
 
         StepVerifier.create(controller.stream(jwt).flatMapMany(ResponseEntity::getBody))
-                .expectError(NotificationsException.class)
+                .expectError(TechnicalException.class)
                 .verify(Duration.ofSeconds(2));
     }
 
@@ -143,11 +145,11 @@ class NotificationControllerTest {
     @DisplayName("a deleted account fails before any response is written, so the advice answers 410")
     void stream_shouldFailBeforeAnyResponse_whenTheAccountIsErased() {
         when(notificationService.openStream("bob"))
-                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.ACCOUNT_DELETED)));
+                .thenReturn(Mono.error(new BusinessException(BusinessErrorCode.ACCOUNT_DELETED)));
 
         StepVerifier.create(controller.stream(jwt))
-                .expectErrorSatisfies(error -> assertThat(((NotificationsException) error).getErrorCode())
-                        .isEqualTo(NotificationsErrorCode.ACCOUNT_DELETED))
+                .expectErrorSatisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo(BusinessErrorCode.ACCOUNT_DELETED))
                 .verify();
     }
 }

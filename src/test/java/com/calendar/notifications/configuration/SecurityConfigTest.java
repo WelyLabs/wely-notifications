@@ -6,6 +6,7 @@ import com.calendar.notifications.domain.ports.ApnsDeviceRepository;
 import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.NotificationRepository;
 import com.calendar.notifications.domain.ports.PreferencesRepository;
+import com.calendar.notifications.exception.GlobalErrorHandler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -121,14 +122,14 @@ class SecurityConfigTest {
                 .bodyValue("{\"token\":\"" + APNS_TOKEN + "\",\"environment\":\"DEVELOPMENT\"}")
                 .exchange()
                 .expectStatus().isBadRequest()
-                .expectBody().jsonPath("$.code").isEqualTo("NTF-VAL-001");
+                .expectBody().jsonPath("$.code").isEqualTo(GlobalErrorHandler.VALIDATION_FAILED_CODE);
 
         as("bob").put().uri("/notifications-service/push/apns-devices")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue("{\"environment\":\"PRODUCTION\"}")
                 .exchange()
                 .expectStatus().isBadRequest()
-                .expectBody().jsonPath("$.code").isEqualTo("NTF-VAL-001");
+                .expectBody().jsonPath("$.code").isEqualTo(GlobalErrorHandler.VALIDATION_FAILED_CODE);
 
         as("bob").put().uri("/notifications-service/push/apns-devices")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -168,7 +169,7 @@ class SecurityConfigTest {
                 .bodyValue("{\"token\":\"" + APNS_TOKEN + "\",\"environment\":\"PRODUCTION\",\"kind\":\"PUSHKIT\"}")
                 .exchange()
                 .expectStatus().isBadRequest()
-                .expectBody().jsonPath("$.code").isEqualTo("NTF-VAL-001");
+                .expectBody().jsonPath("$.code").isEqualTo(GlobalErrorHandler.VALIDATION_FAILED_CODE);
 
         verify(apnsDevices).save(org.mockito.ArgumentMatchers.argThat((ApnsDevice device) ->
                 device.kind() == com.calendar.notifications.domain.models.ApnsPushKind.VOIP));
@@ -221,7 +222,7 @@ class SecurityConfigTest {
                 .bodyValue("{\"ids\":[\"n1\"],\"all\":true}")
                 .exchange()
                 .expectStatus().isBadRequest()
-                .expectBody().jsonPath("$.code").isEqualTo("NTF-VAL-001");
+                .expectBody().jsonPath("$.code").isEqualTo(GlobalErrorHandler.VALIDATION_FAILED_CODE);
 
         as("bob").post().uri("/notifications-service/notifications/read")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -280,7 +281,7 @@ class SecurityConfigTest {
                 .bodyValue("{\"calls\":true}")
                 .exchange()
                 .expectStatus().isBadRequest()
-                .expectBody().jsonPath("$.code").isEqualTo("NTF-VAL-001");
+                .expectBody().jsonPath("$.code").isEqualTo(GlobalErrorHandler.VALIDATION_FAILED_CODE);
     }
 
     @Test

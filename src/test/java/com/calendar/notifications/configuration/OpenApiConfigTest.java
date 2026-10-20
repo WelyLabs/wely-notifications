@@ -10,11 +10,17 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.reactive.server.WebTestClient;
 
 import io.swagger.v3.oas.models.OpenAPI;
+import io.swagger.v3.oas.models.Operation;
+import io.swagger.v3.oas.models.PathItem;
+import io.swagger.v3.oas.models.Paths;
+import io.swagger.v3.oas.models.media.Schema;
+import io.swagger.v3.oas.models.responses.ApiResponse;
+import io.swagger.v3.oas.models.responses.ApiResponses;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Covers {@link OpenApiConfig#openApi} and the two things that make the documentation useful:
+ * Covers {@link OpenApiConfig#openApi}, {@link OpenApiConfig#problemResponses} and the two things that make the documentation useful:
  * that it answers without a token, and that it describes the paths the gateway actually routes.
  *
  * <p>The specification is reachable in-cluster and in dev only. The gateway forwards
@@ -83,5 +89,59 @@ class OpenApiConfigTest {
         assertThat(body).isNotNull();
         assertThat(new String(body, java.nio.charset.StandardCharsets.UTF_8))
                 .contains("\"/notifications-service/");
+    }
+
+    @Test
+    @DisplayName("the Problem schema is registered, with every code of the service as the code enum")
+    void problemResponses_shouldRegisterTheProblemSchema() {
+        OpenAPI openApi = new OpenAPI();
+
+        new OpenApiConfig().problemResponses().customise(openApi);
+
+        Schema<?> problem = openApi.getComponents().getSchemas().get(OpenApiConfig.PROBLEM_SCHEMA);
+        assertThat(problem).isNotNull();
+        assertThat(problem.getProperties()).containsKeys("type", "title", "status", "detail", "instance", "code",
+                "timestamp", "requestId", "errors");
+        Schema<?> code = problem.getProperties().get("code");
+        assertThat(code.getEnum().stream().map(Object::toString).toList())
+                .contains("NTF-BUS-001", "NTF-TEC-001")
+                .containsExactlyInAnyOrderElementsOf(OpenApiConfig.allErrorCodes());
+        assertThat(code.getDescription()).contains("BUS", "VAL", "REQ", "TEC");
+    }
+
+    @Test
+    @DisplayName("every operation gets 4XX and 5XX problem responses, and keeps the ones it declared itself")
+    void problemResponses_shouldDeclareProblemResponses_withoutOverridingDeclaredOnes() {
+        ApiResponse ownClientError = new ApiResponse().description("declared by the operation");
+        Operation undocumented = new Operation();
+        Operation documented = new Operation().responses(new ApiResponses().addApiResponse("4XX", ownClientError));
+        OpenAPI openApi = new OpenAPI().paths(new Paths()
+                .addPathItem("/a", new PathItem().get(undocumented))
+                .addPathItem("/b", new PathItem().post(documented)));
+
+        new OpenApiConfig().problemResponses().customise(openApi);
+
+        assertThat(undocumented.getResponses()).containsKeys("4XX", "5XX");
+        assertThat(undocumented.getResponses().get("5XX").getContent().get("application/problem+json")
+                .getSchema().get$ref()).isEqualTo("#/components/schemas/Problem");
+        assertThat(documented.getResponses().get("4XX")).isSameAs(ownClientError);
+        assertThat(documented.getResponses()).containsKey("5XX");
+    }
+
+    @Test
+    @DisplayName("the served document carries the Problem schema and the problem responses")
+    void apiDocs_shouldDocumentTheProblemResponses() {
+        String operation = "$.paths['/notifications-service/notifications'].get.responses";
+        client().get().uri("/v3/api-docs")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.components.schemas.Problem.properties.code.type").isEqualTo("string")
+                .jsonPath("$.components.schemas.Problem.properties.code.enum").value(codes ->
+                        assertThat(codes.toString()).contains("NTF-BUS-001", "NTF-TEC-001"))
+                .jsonPath(operation + "['4XX'].content['application/problem+json'].schema.$ref")
+                .isEqualTo("#/components/schemas/Problem")
+                .jsonPath(operation + "['5XX'].content['application/problem+json'].schema.$ref")
+                .isEqualTo("#/components/schemas/Problem");
     }
 }

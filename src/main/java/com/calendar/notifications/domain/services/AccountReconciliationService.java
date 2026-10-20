@@ -5,7 +5,8 @@ import com.calendar.notifications.domain.models.DeletedUsersPage;
 import com.calendar.notifications.domain.models.ReconciliationReport;
 import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.DeletedUsersSource;
-import com.calendar.notifications.exception.NotificationsException;
+import com.calendar.notifications.exception.BusinessException;
+import com.calendar.notifications.exception.TechnicalException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -94,9 +95,11 @@ public class AccountReconciliationService {
     }
 
     private static String reason(Throwable error) {
-        return error instanceof NotificationsException known
-                ? known.getErrorCode().getCode() + " " + known.getMessage()
-                : error.toString();
+        return switch (error) {
+            case TechnicalException known -> known.getErrorCode().getCode() + " " + known.getMessage();
+            case BusinessException known -> known.getErrorCode().getCode() + " " + known.getMessage();
+            default -> error.toString();
+        };
     }
 
     /** A page's counts, and the cursor of the page after it. */

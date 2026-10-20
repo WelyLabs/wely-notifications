@@ -16,8 +16,8 @@ import com.calendar.notifications.domain.ports.NativePushSender;
 import com.calendar.notifications.domain.ports.PreferencesRepository;
 import com.calendar.notifications.domain.ports.PushSender;
 import com.calendar.notifications.domain.ports.SubscriptionRepository;
-import com.calendar.notifications.exception.NotificationsErrorCode;
-import com.calendar.notifications.exception.NotificationsException;
+import com.calendar.notifications.exception.BusinessErrorCode;
+import com.calendar.notifications.exception.BusinessException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -59,7 +59,7 @@ public class PushService {
     public Mono<Void> subscribe(String userId, PushSubscription subscription) {
         PushSubscription owned = subscription.withUserId(userId).withCreatedAt(clock.instant());
         if (!owned.isWellFormed()) {
-            return Mono.error(new NotificationsException(NotificationsErrorCode.SUBSCRIPTION_INVALID));
+            return Mono.error(new BusinessException(BusinessErrorCode.SUBSCRIPTION_INVALID));
         }
         return refuseIfDeleted(userId)
                 .then(Mono.defer(() -> subscriptions.save(owned)))
@@ -75,7 +75,7 @@ public class PushService {
     public Mono<Void> registerDevice(String userId, ApnsDevice device) {
         ApnsDevice owned = device.withUserId(userId).withCreatedAt(clock.instant());
         if (!owned.isWellFormed()) {
-            return Mono.error(new NotificationsException(NotificationsErrorCode.APNS_DEVICE_INVALID));
+            return Mono.error(new BusinessException(BusinessErrorCode.APNS_DEVICE_INVALID));
         }
         return refuseIfDeleted(userId)
                 .then(Mono.defer(() -> apnsDevices.save(owned)))
@@ -158,8 +158,8 @@ public class PushService {
                 .flatMap(deleted -> deleted ? undo.then(Mono.error(accountDeleted())) : Mono.empty());
     }
 
-    private static NotificationsException accountDeleted() {
-        return new NotificationsException(NotificationsErrorCode.ACCOUNT_DELETED);
+    private static BusinessException accountDeleted() {
+        return new BusinessException(BusinessErrorCode.ACCOUNT_DELETED);
     }
 
     // Each channel swallows its own failure, so a store error on one never cancels the other.

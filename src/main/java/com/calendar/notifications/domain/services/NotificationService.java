@@ -7,8 +7,8 @@ import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.LiveNotifications;
 import com.calendar.notifications.domain.ports.NotificationRepository;
 import com.calendar.notifications.domain.ports.NotificationWording;
-import com.calendar.notifications.exception.NotificationsErrorCode;
-import com.calendar.notifications.exception.NotificationsException;
+import com.calendar.notifications.exception.BusinessErrorCode;
+import com.calendar.notifications.exception.BusinessException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -85,7 +85,7 @@ public class NotificationService {
     public Mono<Flux<LiveUpdate>> openStream(String recipientId) {
         return isDeleted(recipientId)
                 .flatMap(deleted -> deleted
-                        ? Mono.error(new NotificationsException(NotificationsErrorCode.ACCOUNT_DELETED))
+                        ? Mono.error(new BusinessException(BusinessErrorCode.ACCOUNT_DELETED))
                         : Mono.just(updates(recipientId)));
     }
 

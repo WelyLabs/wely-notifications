@@ -1,7 +1,7 @@
 package com.calendar.notifications.infrastructure.persistence.adapters;
 
-import com.calendar.notifications.exception.NotificationsErrorCode;
-import com.calendar.notifications.exception.NotificationsException;
+import com.calendar.notifications.exception.TechnicalErrorCode;
+import com.calendar.notifications.exception.TechnicalException;
 import org.springframework.dao.DataAccessException;
 
 /** Translates MongoDB failures for the adapters, so none reaches the domain as a Spring type. */
@@ -14,7 +14,7 @@ final class StoreErrors {
         return error instanceof DataAccessException;
     }
 
-    static NotificationsException unavailable(Throwable error) {
-        return new NotificationsException(NotificationsErrorCode.STORE_UNAVAILABLE, error);
+    static TechnicalException unavailable(Throwable error) {
+        return new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE, error);
     }
 }

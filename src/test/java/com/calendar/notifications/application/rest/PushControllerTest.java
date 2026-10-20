@@ -5,8 +5,8 @@ import com.calendar.notifications.application.dtos.PushSubscriptionRequest;
 import com.calendar.notifications.application.mappers.PushRestMapper;
 import com.calendar.notifications.domain.models.PushSubscription;
 import com.calendar.notifications.domain.services.PushService;
-import com.calendar.notifications.exception.NotificationsErrorCode;
-import com.calendar.notifications.exception.NotificationsException;
+import com.calendar.notifications.exception.BusinessErrorCode;
+import com.calendar.notifications.exception.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -65,12 +65,12 @@ class PushControllerTest {
     void subscribe_shouldPropagateTheRefusal_whenTheAccountIsErased() {
         when(jwt.getClaimAsString("businessId")).thenReturn("bob");
         when(pushService.subscribe(eq("bob"), any()))
-                .thenReturn(Mono.error(new NotificationsException(NotificationsErrorCode.ACCOUNT_DELETED)));
+                .thenReturn(Mono.error(new BusinessException(BusinessErrorCode.ACCOUNT_DELETED)));
 
         StepVerifier.create(controller.subscribe(jwt, new PushSubscriptionRequest("https://push/1",
                         new PushSubscriptionRequest.Keys("p", "a"), null)))
-                .expectErrorSatisfies(error -> assertThat(((NotificationsException) error).getErrorCode())
-                        .isEqualTo(NotificationsErrorCode.ACCOUNT_DELETED))
+                .expectErrorSatisfies(error -> assertThat(((BusinessException) error).getErrorCode())
+                        .isEqualTo(BusinessErrorCode.ACCOUNT_DELETED))
                 .verify();
     }
 
