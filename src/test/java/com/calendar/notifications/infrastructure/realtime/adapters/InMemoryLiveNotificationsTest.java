@@ -50,7 +50,7 @@ class InMemoryLiveNotificationsTest {
         StepVerifier.create(live.stream("bob").take(1))
                 .then(() -> live.publish("bob", new LiveUpdate.UnreadChanged(3)))
                 .expectNext(new LiveUpdate.UnreadChanged(3))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         assertThat(live.channelCount()).isZero();
     }
@@ -62,7 +62,7 @@ class InMemoryLiveNotificationsTest {
 
         StepVerifier.create(live.stream("bob"))
                 .then(() -> live.close("bob"))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         assertThat(firstTab.join()).isEmpty();
         assertThat(live.channelCount()).isZero();

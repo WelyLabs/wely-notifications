@@ -16,6 +16,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
@@ -48,7 +49,7 @@ class MongoDeletedUserMarkersAdapterTest {
         DeletedUserEntity marker = new DeletedUserEntity("lea", DELETED_AT, null);
         when(repository.insert(marker)).thenReturn(Mono.just(marker));
 
-        StepVerifier.create(adapter.markDeleted("lea", DELETED_AT)).verifyComplete();
+        StepVerifier.create(adapter.markDeleted("lea", DELETED_AT)).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(repository).insert(marker);
     }
@@ -58,7 +59,7 @@ class MongoDeletedUserMarkersAdapterTest {
     void markDeleted_shouldKeepAnExistingMarker_whenTheInsertIsADuplicate() {
         when(repository.insert(any(DeletedUserEntity.class))).thenReturn(Mono.error(new DuplicateKeyException("dup")));
 
-        StepVerifier.create(adapter.markDeleted("lea", DELETED_AT)).verifyComplete();
+        StepVerifier.create(adapter.markDeleted("lea", DELETED_AT)).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -66,7 +67,7 @@ class MongoDeletedUserMarkersAdapterTest {
     void markErased_shouldStampErasedAt() {
         when(repository.markErased("lea", DELETED_AT)).thenReturn(Mono.just(1L));
 
-        StepVerifier.create(adapter.markErased("lea", DELETED_AT)).verifyComplete();
+        StepVerifier.create(adapter.markErased("lea", DELETED_AT)).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(repository).markErased("lea", DELETED_AT);
     }
@@ -74,8 +75,8 @@ class MongoDeletedUserMarkersAdapterTest {
     @Test
     @DisplayName("no id to check answers false without a query")
     void anyDeleted_shouldAnswerFalseWithoutQuerying_whenNoIdIsGiven() {
-        StepVerifier.create(adapter.anyDeleted(List.of())).expectNext(false).verifyComplete();
-        StepVerifier.create(adapter.anyDeleted(Arrays.asList(null, null))).expectNext(false).verifyComplete();
+        StepVerifier.create(adapter.anyDeleted(List.of())).expectNext(false).expectComplete().verify(Duration.ofSeconds(10));
+        StepVerifier.create(adapter.anyDeleted(Arrays.asList(null, null))).expectNext(false).expectComplete().verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(repository);
     }
@@ -85,7 +86,7 @@ class MongoDeletedUserMarkersAdapterTest {
     void anyDeleted_shouldIgnoreNullIds() {
         when(repository.existsAnyByIdIn(List.of("bob"))).thenReturn(Mono.just(false));
 
-        StepVerifier.create(adapter.anyDeleted(Arrays.asList("bob", null, "bob"))).expectNext(false).verifyComplete();
+        StepVerifier.create(adapter.anyDeleted(Arrays.asList("bob", null, "bob"))).expectNext(false).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(repository).existsAnyByIdIn(List.of("bob"));
     }
@@ -95,7 +96,7 @@ class MongoDeletedUserMarkersAdapterTest {
     void anyDeleted_shouldAskTheStoreForAnyOfTheIds() {
         when(repository.existsAnyByIdIn(List.of("bob", "lea"))).thenReturn(Mono.just(true));
 
-        StepVerifier.create(adapter.anyDeleted(List.of("bob", "lea"))).expectNext(true).verifyComplete();
+        StepVerifier.create(adapter.anyDeleted(List.of("bob", "lea"))).expectNext(true).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -118,13 +119,13 @@ class MongoDeletedUserMarkersAdapterTest {
     void erasedAmong_shouldReturnTheIdsWhoseErasureRan() {
         when(repository.findErasedIdsIn(List.of("bob", "lea"))).thenReturn(Flux.just(new DeletedUserEntity("lea", null, null)));
 
-        StepVerifier.create(adapter.erasedAmong(List.of("bob", "lea"))).expectNext(Set.of("lea")).verifyComplete();
+        StepVerifier.create(adapter.erasedAmong(List.of("bob", "lea"))).expectNext(Set.of("lea")).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
     @DisplayName("no id at all needs no query")
     void erasedAmong_shouldNotQuery_whenNoIdIsGiven() {
-        StepVerifier.create(adapter.erasedAmong(List.of())).expectNext(Set.of()).verifyComplete();
+        StepVerifier.create(adapter.erasedAmong(List.of())).expectNext(Set.of()).expectComplete().verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(repository);
     }

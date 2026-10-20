@@ -25,7 +25,21 @@ public enum BusinessErrorCode {
             "NTF-VAL-002",
             "APNs device invalid",
             "The token must be the device's APNs token in hex, 64 to 200 characters, and environment SANDBOX or PRODUCTION.",
-            HttpStatus.BAD_REQUEST);
+            HttpStatus.BAD_REQUEST),
+
+    /** No bearer token, or one that does not validate; answered by the security chain, not a controller. */
+    AUTHENTICATION_REQUIRED(
+            "NTF-REQ-001",
+            "Authentication required",
+            "A valid bearer token is required.",
+            HttpStatus.UNAUTHORIZED),
+
+    /** A valid token that the security chain refuses for this path. */
+    ACCESS_DENIED(
+            "NTF-REQ-002",
+            "Access denied",
+            "The token does not grant access to this resource.",
+            HttpStatus.FORBIDDEN);
 
     private final String code;
     private final String title;

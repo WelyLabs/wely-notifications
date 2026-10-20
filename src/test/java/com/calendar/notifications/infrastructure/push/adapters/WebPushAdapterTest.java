@@ -116,7 +116,7 @@ class WebPushAdapterTest {
     void send_shouldPostAnEncryptedSignedPush() throws Exception {
         StepVerifier.create(adapter().send(device(UA_PUBLIC), ringing()))
                 .expectNext(PushResult.DELIVERED)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         MockClientHttpRequest request = sent.getFirst();
         assertThat(request.getMethod()).isEqualTo(HttpMethod.POST);
@@ -143,7 +143,7 @@ class WebPushAdapterTest {
     void send_shouldUseNormalUrgency_forAnythingButACall() {
         StepVerifier.create(adapter().send(device(UA_PUBLIC), friendRequest()))
                 .expectNext(PushResult.DELIVERED)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         MockClientHttpRequest request = sent.getFirst();
         assertThat(request.getHeaders().getFirst("Urgency")).isEqualTo("normal");
@@ -158,7 +158,7 @@ class WebPushAdapterTest {
 
         StepVerifier.create(adapter().send(device(UA_PUBLIC), ringing()))
                 .expectNext(PushResult.GONE)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @ParameterizedTest
@@ -169,7 +169,7 @@ class WebPushAdapterTest {
 
         StepVerifier.create(adapter().send(device(UA_PUBLIC), ringing()))
                 .expectNext(PushResult.FAILED)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -180,7 +180,7 @@ class WebPushAdapterTest {
 
         StepVerifier.create(adapter().send(device(UA_PUBLIC), ringing()))
                 .expectNext(PushResult.FAILED)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -192,7 +192,7 @@ class WebPushAdapterTest {
 
         StepVerifier.create(slow.send(device(UA_PUBLIC), ringing()))
                 .expectNext(PushResult.FAILED)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -203,7 +203,7 @@ class WebPushAdapterTest {
 
         StepVerifier.create(adapter().send(device(B64.encodeToString(offCurve)), ringing()))
                 .expectNext(PushResult.FAILED)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
         assertThat(sent).isEmpty();
     }
 
@@ -223,7 +223,7 @@ class WebPushAdapterTest {
 
         assertThat(adapter.enabled()).isFalse();
         assertThat(adapter.publicKey()).isEmpty();
-        StepVerifier.create(adapter.send(device(UA_PUBLIC), ringing())).expectNext(PushResult.FAILED).verifyComplete();
+        StepVerifier.create(adapter.send(device(UA_PUBLIC), ringing())).expectNext(PushResult.FAILED).expectComplete().verify(Duration.ofSeconds(10));
         assertThat(sent).isEmpty();
     }
 
@@ -243,7 +243,7 @@ class WebPushAdapterTest {
         answer = () -> Mono.just(ClientResponse.create(HttpStatus.BAD_REQUEST)
                 .header("Content-Type", "application/json").body("{\"reason\":\"BadWebPushTopic\"}").build());
 
-        StepVerifier.create(adapter().send(device(UA_PUBLIC), ringing())).expectNext(PushResult.FAILED).verifyComplete();
+        StepVerifier.create(adapter().send(device(UA_PUBLIC), ringing())).expectNext(PushResult.FAILED).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test

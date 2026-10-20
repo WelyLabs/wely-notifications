@@ -11,6 +11,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.time.Duration;
 import java.util.List;
 
 import static org.mockito.Mockito.when;
@@ -30,7 +31,7 @@ class EventMembershipServiceTest {
     void apply_shouldReportWhetherTheMembershipWasStored() {
         when(eventMembers.apply(MEMBERSHIP)).thenReturn(Mono.just(false));
 
-        StepVerifier.create(service.apply(MEMBERSHIP)).expectNext(false).verifyComplete();
+        StepVerifier.create(service.apply(MEMBERSHIP)).expectNext(false).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -39,7 +40,7 @@ class EventMembershipServiceTest {
         when(eventMembers.find("e1")).thenReturn(Mono.just(MEMBERSHIP));
         when(eventMembers.find("e2")).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.find("e1")).expectNext(MEMBERSHIP).verifyComplete();
-        StepVerifier.create(service.find("e2")).verifyComplete();
+        StepVerifier.create(service.find("e1")).expectNext(MEMBERSHIP).expectComplete().verify(Duration.ofSeconds(10));
+        StepVerifier.create(service.find("e2")).expectComplete().verify(Duration.ofSeconds(10));
     }
 }

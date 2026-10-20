@@ -35,6 +35,7 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -129,7 +130,7 @@ class PushServiceTest {
         when(markers.anyDeleted(List.of("bob"))).thenReturn(Mono.just(false));
         when(subscriptions.save(any())).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.subscribe("bob", sent)).verifyComplete();
+        StepVerifier.create(service.subscribe("bob", sent)).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(subscriptions).save(new PushSubscription("bob", "https://push.example/1", P256DH, AUTH, "Phone", NOW));
         verify(subscriptions, never()).deleteOwned(any(), any());
@@ -142,7 +143,7 @@ class PushServiceTest {
 
         StepVerifier.create(service.subscribe("bob", device("https://push.example/1")))
                 .expectErrorMatches(PushServiceTest::accountDeleted)
-                .verify();
+                .verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(subscriptions);
     }
@@ -156,7 +157,7 @@ class PushServiceTest {
 
         StepVerifier.create(service.subscribe("bob", device("https://push.example/1")))
                 .expectErrorMatches(PushServiceTest::accountDeleted)
-                .verify();
+                .verify(Duration.ofSeconds(10));
 
         InOrder order = inOrder(subscriptions);
         order.verify(subscriptions).save(any());
@@ -174,7 +175,7 @@ class PushServiceTest {
         StepVerifier.create(service.subscribe("bob", device("https://push.example/1")))
                 .expectErrorSatisfies(error -> assertThat(((TechnicalException) error).getErrorCode())
                         .isEqualTo(TechnicalErrorCode.STORE_UNAVAILABLE))
-                .verify();
+                .verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -185,7 +186,7 @@ class PushServiceTest {
         StepVerifier.create(service.subscribe("bob", sent))
                 .expectErrorSatisfies(error -> assertThat(((BusinessException) error).getErrorCode())
                         .isEqualTo(BusinessErrorCode.SUBSCRIPTION_INVALID))
-                .verify();
+                .verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(subscriptions, markers);
     }
@@ -195,7 +196,7 @@ class PushServiceTest {
     void unsubscribe_shouldDeleteTheCallersDeviceOnly() {
         when(subscriptions.deleteOwned("bob", "https://push.example/1")).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.unsubscribe("bob", "https://push.example/1")).verifyComplete();
+        StepVerifier.create(service.unsubscribe("bob", "https://push.example/1")).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(subscriptions).deleteOwned("bob", "https://push.example/1");
     }
@@ -207,7 +208,7 @@ class PushServiceTest {
 
         StepVerifier.create(service.preferences("bob"))
                 .expectNext(NotificationPreferences.defaults("bob"))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -216,7 +217,7 @@ class PushServiceTest {
         NotificationPreferences saved = new NotificationPreferences("bob", Map.of(NotificationCategory.CALLS, false));
         when(preferences.find("bob")).thenReturn(Mono.just(saved));
 
-        StepVerifier.create(service.preferences("bob")).expectNext(saved).verifyComplete();
+        StepVerifier.create(service.preferences("bob")).expectNext(saved).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -229,7 +230,7 @@ class PushServiceTest {
 
         StepVerifier.create(service.updatePreferences("bob", new NotificationPreferences("mallory", push)))
                 .expectNext(expected)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         verify(preferences, never()).delete(any());
     }
@@ -244,7 +245,7 @@ class PushServiceTest {
 
         StepVerifier.create(service.updatePreferences("bob", saved))
                 .expectErrorMatches(PushServiceTest::accountDeleted)
-                .verify();
+                .verify(Duration.ofSeconds(10));
 
         InOrder order = inOrder(preferences);
         order.verify(preferences).save(saved);
@@ -258,7 +259,7 @@ class PushServiceTest {
 
         StepVerifier.create(service.updatePreferences("bob", NotificationPreferences.defaults("bob")))
                 .expectErrorMatches(PushServiceTest::accountDeleted)
-                .verify();
+                .verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(preferences);
     }
@@ -271,7 +272,7 @@ class PushServiceTest {
         when(subscriptions.findByUser("bob")).thenReturn(Flux.just(device("https://a/1"), device("https://b/2")));
         when(sender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
 
-        StepVerifier.create(service.deliver(message())).verifyComplete();
+        StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(sender).send(eq(device("https://a/1")), eq(PushMessage.of(message())));
         verify(sender).send(eq(device("https://b/2")), any());
@@ -287,7 +288,7 @@ class PushServiceTest {
         when(sender.send(any(), any())).thenReturn(Mono.just(PushResult.GONE));
         when(subscriptions.delete("https://a/1")).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.deliver(message())).verifyComplete();
+        StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(subscriptions).delete("https://a/1");
     }
@@ -299,7 +300,7 @@ class PushServiceTest {
         when(preferences.find("bob")).thenReturn(Mono.just(
                 new NotificationPreferences("bob", Map.of(NotificationCategory.MESSAGES, false))));
 
-        StepVerifier.create(service.deliver(message())).verifyComplete();
+        StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(subscriptions);
         verify(sender, never()).send(any(), any());
@@ -310,7 +311,7 @@ class PushServiceTest {
     void deliver_shouldDoNothing_whenPushIsDisabled() {
         when(sender.enabled()).thenReturn(false);
 
-        StepVerifier.create(service.deliver(message())).verifyComplete();
+        StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(subscriptions, preferences, apnsDevices);
     }
@@ -324,7 +325,7 @@ class PushServiceTest {
         when(sender.send(eq(device("https://a/1")), any())).thenReturn(Mono.error(new IllegalStateException("boom")));
         when(sender.send(eq(device("https://b/2")), any())).thenReturn(Mono.just(PushResult.DELIVERED));
 
-        StepVerifier.create(service.deliver(message())).verifyComplete();
+        StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(sender).send(eq(device("https://b/2")), any());
     }
@@ -336,7 +337,7 @@ class PushServiceTest {
         when(preferences.find("bob"))
                 .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
 
-        StepVerifier.create(service.deliver(message())).verifyComplete();
+        StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -346,7 +347,7 @@ class PushServiceTest {
         when(apnsDevices.save(any())).thenReturn(Mono.empty());
 
         StepVerifier.create(service.registerDevice("bob",
-                new ApnsDevice("mallory", TOKEN.toUpperCase(), ApnsEnvironment.SANDBOX, ApnsPushKind.ALERT, null))).verifyComplete();
+                new ApnsDevice("mallory", TOKEN.toUpperCase(), ApnsEnvironment.SANDBOX, ApnsPushKind.ALERT, null))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(apnsDevices).save(new ApnsDevice("bob", TOKEN, ApnsEnvironment.SANDBOX, ApnsPushKind.ALERT, NOW));
         verify(apnsDevices, never()).deleteOwned(any(), any());
@@ -359,7 +360,7 @@ class PushServiceTest {
 
         StepVerifier.create(service.registerDevice("bob", iphone(TOKEN)))
                 .expectErrorMatches(PushServiceTest::accountDeleted)
-                .verify();
+                .verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(apnsDevices);
     }
@@ -373,7 +374,7 @@ class PushServiceTest {
 
         StepVerifier.create(service.registerDevice("bob", iphone(TOKEN)))
                 .expectErrorMatches(PushServiceTest::accountDeleted)
-                .verify();
+                .verify(Duration.ofSeconds(10));
 
         InOrder order = inOrder(apnsDevices);
         order.verify(apnsDevices).save(any());
@@ -386,7 +387,7 @@ class PushServiceTest {
         StepVerifier.create(service.registerDevice("bob", iphone("not-hex")))
                 .expectErrorSatisfies(error -> assertThat(((BusinessException) error).getErrorCode())
                         .isEqualTo(BusinessErrorCode.APNS_DEVICE_INVALID))
-                .verify();
+                .verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(apnsDevices, markers);
     }
@@ -401,7 +402,7 @@ class PushServiceTest {
         StepVerifier.create(service.registerDevice("bob", iphone(TOKEN)))
                 .expectErrorSatisfies(error -> assertThat(((TechnicalException) error).getErrorCode())
                         .isEqualTo(TechnicalErrorCode.STORE_UNAVAILABLE))
-                .verify();
+                .verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -409,7 +410,7 @@ class PushServiceTest {
     void unregisterDevice_shouldDeleteTheCallersDeviceOnly() {
         when(apnsDevices.deleteOwned("bob", TOKEN)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.unregisterDevice("bob", TOKEN.toUpperCase())).verifyComplete();
+        StepVerifier.create(service.unregisterDevice("bob", TOKEN.toUpperCase())).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(apnsDevices).deleteOwned("bob", TOKEN);
     }
@@ -423,7 +424,7 @@ class PushServiceTest {
         when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(iphone(TOKEN)));
         when(nativeSender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
 
-        StepVerifier.create(service.deliver(message())).verifyComplete();
+        StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(nativeSender).send(iphone(TOKEN), PushMessage.of(message()));
         verifyNoInteractions(subscriptions);
@@ -441,7 +442,7 @@ class PushServiceTest {
         when(sender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
         when(nativeSender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
 
-        StepVerifier.create(service.deliver(message())).verifyComplete();
+        StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(sender).send(eq(device("https://a/1")), any());
         verify(nativeSender).send(eq(iphone(TOKEN)), any());
@@ -457,7 +458,7 @@ class PushServiceTest {
         when(nativeSender.send(any(), any())).thenReturn(Mono.just(PushResult.GONE));
         when(apnsDevices.delete(TOKEN)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.deliver(message())).verifyComplete();
+        StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(apnsDevices).delete(TOKEN);
     }
@@ -469,7 +470,7 @@ class PushServiceTest {
         when(preferences.find("bob")).thenReturn(Mono.just(
                 new NotificationPreferences("bob", Map.of(NotificationCategory.MESSAGES, false))));
 
-        StepVerifier.create(service.deliver(message())).verifyComplete();
+        StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(apnsDevices);
         verify(nativeSender, never()).send(any(), any());
@@ -486,7 +487,7 @@ class PushServiceTest {
         when(subscriptions.findByUser("bob")).thenReturn(Flux.just(device("https://a/1")));
         when(sender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
 
-        StepVerifier.create(service.deliver(message())).verifyComplete();
+        StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(sender).send(eq(device("https://a/1")), any());
     }
@@ -502,7 +503,7 @@ class PushServiceTest {
         when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(iphone(TOKEN)));
         when(nativeSender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
 
-        StepVerifier.create(service.deliver(message())).verifyComplete();
+        StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(nativeSender).send(eq(iphone(TOKEN)), any());
     }
@@ -517,7 +518,7 @@ class PushServiceTest {
         when(nativeSender.send(eq(iphone(TOKEN)), any())).thenReturn(Mono.error(new IllegalStateException("boom")));
         when(nativeSender.send(eq(iphone(other)), any())).thenReturn(Mono.just(PushResult.DELIVERED));
 
-        StepVerifier.create(service.deliver(message())).verifyComplete();
+        StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(nativeSender).send(eq(iphone(other)), any());
     }
@@ -530,7 +531,7 @@ class PushServiceTest {
         when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(iphone(TOKEN), pushKit(VOIP_TOKEN)));
         when(nativeSender.sendVoip(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
 
-        StepVerifier.create(service.deliverCall(ringing(), CALL)).verifyComplete();
+        StepVerifier.create(service.deliverCall(ringing(), CALL)).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(nativeSender).sendVoip(pushKit(VOIP_TOKEN),
                 new VoipPush.Ring("k1", "Appel vidéo", "lea", CallMedia.VIDEO, "conv1", "/call/k1"));
@@ -548,7 +549,7 @@ class PushServiceTest {
         when(sender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
         when(nativeSender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
 
-        StepVerifier.create(service.deliverCall(ringing(), CALL)).verifyComplete();
+        StepVerifier.create(service.deliverCall(ringing(), CALL)).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(nativeSender).send(iphone(TOKEN), PushMessage.of(ringing()));
         verify(sender).send(eq(device("https://a/1")), any());
@@ -562,7 +563,7 @@ class PushServiceTest {
         when(preferences.find("bob")).thenReturn(Mono.just(
                 new NotificationPreferences("bob", Map.of(NotificationCategory.CALLS, false))));
 
-        StepVerifier.create(service.deliverCall(ringing(), CALL)).verifyComplete();
+        StepVerifier.create(service.deliverCall(ringing(), CALL)).expectComplete().verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(apnsDevices);
         verify(nativeSender, never()).sendVoip(any(), any());
@@ -577,7 +578,7 @@ class PushServiceTest {
         when(nativeSender.sendVoip(any(), any())).thenReturn(Mono.just(PushResult.GONE));
         when(apnsDevices.delete(VOIP_TOKEN)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.deliverCall(ringing(), CALL)).verifyComplete();
+        StepVerifier.create(service.deliverCall(ringing(), CALL)).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(apnsDevices).delete(VOIP_TOKEN);
     }
@@ -590,7 +591,7 @@ class PushServiceTest {
         when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(pushKit(VOIP_TOKEN)));
         when(nativeSender.sendVoip(any(), any())).thenReturn(Mono.error(new IllegalStateException("boom")));
 
-        StepVerifier.create(service.deliverCall(ringing(), CALL)).verifyComplete();
+        StepVerifier.create(service.deliverCall(ringing(), CALL)).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -601,7 +602,7 @@ class PushServiceTest {
         when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(iphone(TOKEN), pushKit(VOIP_TOKEN)));
         when(nativeSender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
 
-        StepVerifier.create(service.deliver(missed())).verifyComplete();
+        StepVerifier.create(service.deliver(missed())).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(nativeSender).send(eq(iphone(TOKEN)), any());
         verify(nativeSender, never()).send(eq(pushKit(VOIP_TOKEN)), any());
@@ -616,7 +617,7 @@ class PushServiceTest {
         when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(iphone(TOKEN), pushKit(VOIP_TOKEN)));
         when(nativeSender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
 
-        StepVerifier.create(service.deliver(ringing())).verifyComplete();
+        StepVerifier.create(service.deliver(ringing())).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(nativeSender).send(eq(iphone(TOKEN)), any());
         verify(nativeSender, never()).sendVoip(any(), any());
@@ -630,7 +631,7 @@ class PushServiceTest {
         when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(iphone(TOKEN), pushKit(VOIP_TOKEN)));
         when(nativeSender.sendVoip(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
 
-        StepVerifier.create(service.endRinging("bob", "k1")).verifyComplete();
+        StepVerifier.create(service.endRinging("bob", "k1")).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(nativeSender).sendVoip(pushKit(VOIP_TOKEN), new VoipPush.Hangup("k1"));
         verify(nativeSender, never()).sendVoip(eq(iphone(TOKEN)), any());
@@ -642,7 +643,7 @@ class PushServiceTest {
     void endRinging_shouldDoNothing_whenApnsIsOff() {
         when(nativeSender.enabled()).thenReturn(false);
 
-        StepVerifier.create(service.endRinging("bob", "k1")).verifyComplete();
+        StepVerifier.create(service.endRinging("bob", "k1")).expectComplete().verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(preferences, apnsDevices);
     }
@@ -654,7 +655,7 @@ class PushServiceTest {
         when(preferences.find("bob")).thenReturn(Mono.just(
                 new NotificationPreferences("bob", Map.of(NotificationCategory.CALLS, false))));
 
-        StepVerifier.create(service.endRinging("bob", "k1")).verifyComplete();
+        StepVerifier.create(service.endRinging("bob", "k1")).expectComplete().verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(apnsDevices);
     }
@@ -669,8 +670,8 @@ class PushServiceTest {
         when(nativeSender.sendVoip(any(), any())).thenReturn(Mono.just(PushResult.GONE));
         when(apnsDevices.delete(VOIP_TOKEN)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.endRinging("bob", "k1")).verifyComplete();
-        StepVerifier.create(service.endRinging("bob", "k1")).verifyComplete();
+        StepVerifier.create(service.endRinging("bob", "k1")).expectComplete().verify(Duration.ofSeconds(10));
+        StepVerifier.create(service.endRinging("bob", "k1")).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(apnsDevices).delete(VOIP_TOKEN);
     }

@@ -18,6 +18,7 @@ import reactor.test.StepVerifier;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.time.Duration;
 import java.time.ZoneId;
 import java.util.function.Function;
 
@@ -58,7 +59,7 @@ class FriendshipNoticesConsumerTest {
     void friendshipNotices_shouldNotifyAReunionNudge() {
         when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
 
-        StepVerifier.create(friendshipNotices.apply(Flux.just(record(NUDGE)))).verifyComplete();
+        StepVerifier.create(friendshipNotices.apply(Flux.just(record(NUDGE)))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(notificationService).notify(Notification.draft("bob", NotificationType.REUNION_NUDGE,
                 "💭 Ça fait un moment, Hugo", "Vous ne vous êtes pas vus depuis 4 mois. Et si tu proposais une sortie ?",
@@ -72,7 +73,7 @@ class FriendshipNoticesConsumerTest {
                 .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).build()).friendshipNotices();
         when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
 
-        StepVerifier.create(friendshipNotices.apply(Flux.just(record(ANNIVERSARY)))).verifyComplete();
+        StepVerifier.create(friendshipNotices.apply(Flux.just(record(ANNIVERSARY)))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(notificationService).notify(Notification.draft("bob", NotificationType.FRIENDSHIP_ANNIVERSARY,
                 "💛 2 ans d'amitié avec Léa", "Revivez vos souvenirs ensemble.", "/friends/lea/memories",
@@ -84,7 +85,7 @@ class FriendshipNoticesConsumerTest {
     void friendshipNotices_shouldIgnoreAnUnknownNotice() {
         StepVerifier.create(friendshipNotices.apply(Flux.just(record("""
                 {"type":"FRIENDSHIP_FORGOTTEN","recipientId":"bob","friendId":"hugo","friendName":"Hugo"}"""))))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(notificationService);
     }
@@ -97,7 +98,7 @@ class FriendshipNoticesConsumerTest {
                 .thenAnswer(call -> Mono.just(call.getArgument(0)));
 
         StepVerifier.create(friendshipNotices.apply(Flux.just(record("{"), record(NUDGE), record(ANNIVERSARY))))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         verify(notificationService, times(2)).notify(any());
     }

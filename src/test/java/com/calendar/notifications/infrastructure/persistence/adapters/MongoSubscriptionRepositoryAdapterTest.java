@@ -16,6 +16,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.time.Duration;
 import java.time.Instant;
 
 import static com.calendar.notifications.infrastructure.persistence.adapters.MongoNotificationRepositoryAdapterTest.assertStoreUnavailable;
@@ -47,7 +48,7 @@ class MongoSubscriptionRepositoryAdapterTest {
     void save_shouldWriteUnderTheEndpoint() {
         when(repository.save(ENTITY)).thenReturn(Mono.just(ENTITY));
 
-        StepVerifier.create(adapter.save(DEVICE)).verifyComplete();
+        StepVerifier.create(adapter.save(DEVICE)).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(repository).save(ENTITY);
     }
@@ -57,7 +58,7 @@ class MongoSubscriptionRepositoryAdapterTest {
     void findByUser_shouldReadTheUsersDevices() {
         when(repository.findByUser("bob")).thenReturn(Flux.just(ENTITY));
 
-        StepVerifier.create(adapter.findByUser("bob")).expectNext(DEVICE).verifyComplete();
+        StepVerifier.create(adapter.findByUser("bob")).expectNext(DEVICE).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -65,7 +66,7 @@ class MongoSubscriptionRepositoryAdapterTest {
     void deleteOwned_shouldUseTheOwnerScopedQuery() {
         when(repository.deleteOwned("https://push/1", "bob")).thenReturn(Mono.just(1L));
 
-        StepVerifier.create(adapter.deleteOwned("bob", "https://push/1")).verifyComplete();
+        StepVerifier.create(adapter.deleteOwned("bob", "https://push/1")).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -73,7 +74,7 @@ class MongoSubscriptionRepositoryAdapterTest {
     void delete_shouldDeleteTheEndpoint() {
         when(repository.deleteById("https://push/1")).thenReturn(Mono.empty());
 
-        StepVerifier.create(adapter.delete("https://push/1")).verifyComplete();
+        StepVerifier.create(adapter.delete("https://push/1")).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(repository).deleteById("https://push/1");
     }
@@ -83,7 +84,7 @@ class MongoSubscriptionRepositoryAdapterTest {
     void deleteByUser_shouldUseTheUserQuery() {
         when(repository.deleteByUser("bob")).thenReturn(Mono.just(2L));
 
-        StepVerifier.create(adapter.deleteByUser("bob")).verifyComplete();
+        StepVerifier.create(adapter.deleteByUser("bob")).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(repository).deleteByUser("bob");
     }

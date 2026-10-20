@@ -82,7 +82,7 @@ class AccountReconciliationServiceTest {
 
         StepVerifier.create(service.reconcile())
                 .expectNext(new ReconciliationReport(1, 1, 0))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         verify(erasure).erase("alice", LONG_AGO);
     }
@@ -97,7 +97,7 @@ class AccountReconciliationServiceTest {
 
         StepVerifier.create(service.reconcile())
                 .expectNext(new ReconciliationReport(2, 2, 0))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         verify(erasure).erase("alice", RECENTLY);
         verify(erasure).erase("bob", NOW.minus(RECENT_WINDOW));
@@ -110,7 +110,7 @@ class AccountReconciliationServiceTest {
 
         StepVerifier.create(service.reconcile())
                 .expectNext(new ReconciliationReport(1, 0, 0))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(erasure);
     }
@@ -124,7 +124,7 @@ class AccountReconciliationServiceTest {
 
         StepVerifier.create(service.reconcile())
                 .expectNext(new ReconciliationReport(1, 1, 0))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -136,7 +136,7 @@ class AccountReconciliationServiceTest {
 
         StepVerifier.create(service.reconcile())
                 .expectNext(new ReconciliationReport(3, 0, 0))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         verify(source, times(3)).page(any(), anyInt());
     }
@@ -151,7 +151,7 @@ class AccountReconciliationServiceTest {
 
         StepVerifier.create(service.reconcile())
                 .expectNext(new ReconciliationReport(2, 2, 0))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         InOrder order = inOrder(source, erasure);
         order.verify(source).page(null, PAGE_SIZE);
@@ -167,7 +167,7 @@ class AccountReconciliationServiceTest {
 
         StepVerifier.create(service.reconcile())
                 .expectNext(new ReconciliationReport(2, 0, 0))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         verify(markers).erasedAmong(List.of("alice", "bob"));
     }
@@ -179,7 +179,7 @@ class AccountReconciliationServiceTest {
 
         StepVerifier.create(service.reconcile())
                 .expectNext(ReconciliationReport.NONE)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         verify(source, never()).page("c1", PAGE_SIZE);
         verifyNoInteractions(markers, erasure);
@@ -194,7 +194,7 @@ class AccountReconciliationServiceTest {
 
         StepVerifier.create(service.reconcile())
                 .expectNext(new ReconciliationReport(2, 0, 0))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         verify(source, times(1)).page("c1", PAGE_SIZE);
     }
@@ -208,7 +208,7 @@ class AccountReconciliationServiceTest {
 
         StepVerifier.create(service.reconcile())
                 .expectNext(new ReconciliationReport(2, 1, 1))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -220,7 +220,7 @@ class AccountReconciliationServiceTest {
 
         StepVerifier.create(service.reconcile())
                 .expectNext(new ReconciliationReport(1, 0, 1))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -232,7 +232,7 @@ class AccountReconciliationServiceTest {
 
         StepVerifier.create(service.reconcile())
                 .expectNext(new ReconciliationReport(1, 0, 1))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -242,7 +242,7 @@ class AccountReconciliationServiceTest {
         StepVerifier.create(service.reconcile())
                 .expectErrorMatches(error -> error instanceof TechnicalException failure
                         && failure.getErrorCode() == TechnicalErrorCode.USERS_UNAVAILABLE)
-                .verify();
+                .verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(markers, erasure);
     }
@@ -255,7 +255,7 @@ class AccountReconciliationServiceTest {
         erasedHere();
         when(erasure.erase("alice", LONG_AGO)).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.reconcile()).expectError(TechnicalException.class).verify();
+        StepVerifier.create(service.reconcile()).expectError(TechnicalException.class).verify(Duration.ofSeconds(10));
 
         verify(erasure).erase("alice", LONG_AGO);
     }
@@ -269,7 +269,7 @@ class AccountReconciliationServiceTest {
         StepVerifier.create(service.reconcile())
                 .expectErrorMatches(error -> error instanceof TechnicalException failure
                         && failure.getErrorCode() == TechnicalErrorCode.STORE_UNAVAILABLE)
-                .verify();
+                .verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(erasure);
     }
@@ -280,7 +280,7 @@ class AccountReconciliationServiceTest {
 
         StepVerifier.create(service.reconcile())
                 .expectNext(ReconciliationReport.NONE)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(markers, erasure);
     }

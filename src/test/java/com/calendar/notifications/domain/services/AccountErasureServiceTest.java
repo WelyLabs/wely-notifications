@@ -19,6 +19,7 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Set;
@@ -75,7 +76,7 @@ class AccountErasureServiceTest {
     void erase_shouldMarkFirstThenCloseTheStreamThenDeleteDevicesPreferencesAndNotificationsThenStampErasedAt() {
         everyStepSucceeds(Set.of());
 
-        StepVerifier.create(service.erase("lea", DELETED_AT)).verifyComplete();
+        StepVerifier.create(service.erase("lea", DELETED_AT)).expectComplete().verify(Duration.ofSeconds(10));
 
         InOrder order = inOrder(markers, live, subscriptions, apnsDevices, preferences, notifications);
         order.verify(markers).markDeleted("lea", DELETED_AT);
@@ -93,7 +94,7 @@ class AccountErasureServiceTest {
     void erase_shouldKeepTheGivenDeletionTimeOnTheMarker() {
         everyStepSucceeds(Set.of());
 
-        StepVerifier.create(service.erase("lea", DELETED_AT)).verifyComplete();
+        StepVerifier.create(service.erase("lea", DELETED_AT)).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(markers).markDeleted("lea", DELETED_AT);
     }
@@ -103,7 +104,7 @@ class AccountErasureServiceTest {
     void erase_shouldUseTheProcessingTime_whenDeletedAtIsMissing() {
         everyStepSucceeds(Set.of());
 
-        StepVerifier.create(service.erase("lea", null)).verifyComplete();
+        StepVerifier.create(service.erase("lea", null)).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(markers).markDeleted("lea", NOW);
     }
@@ -114,7 +115,7 @@ class AccountErasureServiceTest {
         everyStepSucceeds(Set.of("bob", "carl"));
         when(notificationService.announceUnreadCount(any())).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.erase("lea", DELETED_AT)).verifyComplete();
+        StepVerifier.create(service.erase("lea", DELETED_AT)).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(notificationService).announceUnreadCount("bob");
         verify(notificationService).announceUnreadCount("carl");
@@ -128,7 +129,7 @@ class AccountErasureServiceTest {
                 .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
         when(notificationService.announceUnreadCount("carl")).thenReturn(Mono.empty());
 
-        StepVerifier.create(service.erase("lea", DELETED_AT)).verifyComplete();
+        StepVerifier.create(service.erase("lea", DELETED_AT)).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(notificationService).announceUnreadCount("carl");
         verify(markers).markErased("lea", NOW);
@@ -143,7 +144,7 @@ class AccountErasureServiceTest {
         when(preferences.delete("lea"))
                 .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
 
-        StepVerifier.create(service.erase("lea", DELETED_AT)).expectError(TechnicalException.class).verify();
+        StepVerifier.create(service.erase("lea", DELETED_AT)).expectError(TechnicalException.class).verify(Duration.ofSeconds(10));
 
         verify(notifications, never()).deleteByRecipient(any());
         verify(notifications, never()).deleteByActor(any());
@@ -158,7 +159,7 @@ class AccountErasureServiceTest {
         when(apnsDevices.deleteByUser("lea"))
                 .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
 
-        StepVerifier.create(service.erase("lea", DELETED_AT)).expectError(TechnicalException.class).verify();
+        StepVerifier.create(service.erase("lea", DELETED_AT)).expectError(TechnicalException.class).verify(Duration.ofSeconds(10));
 
         verify(preferences, never()).delete(any());
         verify(markers, never()).markErased(any(), any());
@@ -170,7 +171,7 @@ class AccountErasureServiceTest {
         when(markers.markDeleted("lea", DELETED_AT))
                 .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
 
-        StepVerifier.create(service.erase("lea", DELETED_AT)).expectError(TechnicalException.class).verify();
+        StepVerifier.create(service.erase("lea", DELETED_AT)).expectError(TechnicalException.class).verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(live, subscriptions, apnsDevices, preferences, notifications, notificationService);
         verify(markers, never()).markErased(any(), any());
@@ -181,8 +182,8 @@ class AccountErasureServiceTest {
     void erase_shouldRunEveryStepAgain_whenTheMarkerAlreadyExists() {
         everyStepSucceeds(Set.of());
 
-        StepVerifier.create(service.erase("lea", DELETED_AT)).verifyComplete();
-        StepVerifier.create(service.erase("lea", DELETED_AT)).verifyComplete();
+        StepVerifier.create(service.erase("lea", DELETED_AT)).expectComplete().verify(Duration.ofSeconds(10));
+        StepVerifier.create(service.erase("lea", DELETED_AT)).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(markers, times(2)).markDeleted("lea", DELETED_AT);
         verify(live, times(2)).close("lea");

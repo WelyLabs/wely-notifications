@@ -18,6 +18,8 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.time.Duration;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -55,7 +57,7 @@ class PushControllerTest {
         when(pushService.subscribe("bob", expected)).thenReturn(Mono.empty());
 
         StepVerifier.create(controller.subscribe(jwt, new PushSubscriptionRequest("https://push/1",
-                new PushSubscriptionRequest.Keys("p", "a"), null))).verifyComplete();
+                new PushSubscriptionRequest.Keys("p", "a"), null))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(pushService).subscribe("bob", expected);
     }
@@ -71,7 +73,7 @@ class PushControllerTest {
                         new PushSubscriptionRequest.Keys("p", "a"), null)))
                 .expectErrorSatisfies(error -> assertThat(((BusinessException) error).getErrorCode())
                         .isEqualTo(BusinessErrorCode.ACCOUNT_DELETED))
-                .verify();
+                .verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -80,7 +82,7 @@ class PushControllerTest {
         when(jwt.getClaimAsString("businessId")).thenReturn("bob");
         when(pushService.unsubscribe("bob", "https://push/1")).thenReturn(Mono.empty());
 
-        StepVerifier.create(controller.unsubscribe(jwt, "https://push/1")).verifyComplete();
+        StepVerifier.create(controller.unsubscribe(jwt, "https://push/1")).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(pushService).unsubscribe("bob", "https://push/1");
     }

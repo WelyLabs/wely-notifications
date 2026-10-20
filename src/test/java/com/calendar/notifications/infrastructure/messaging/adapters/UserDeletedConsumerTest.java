@@ -54,7 +54,7 @@ class UserDeletedConsumerTest {
     void userDeleted_shouldEraseTheUserAtTheirDeletionTime() {
         when(erasure.erase("lea", DELETED_AT)).thenReturn(Mono.empty());
 
-        StepVerifier.create(userDeleted.apply(Flux.just(record(LEA_DELETED)))).verifyComplete();
+        StepVerifier.create(userDeleted.apply(Flux.just(record(LEA_DELETED)))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(erasure).erase("lea", DELETED_AT);
     }
@@ -64,7 +64,7 @@ class UserDeletedConsumerTest {
     void userDeleted_shouldPassNoDeletionTime_whenTheRecordPredatesIt() {
         when(erasure.erase("lea", null)).thenReturn(Mono.empty());
 
-        StepVerifier.create(userDeleted.apply(Flux.just(record("{\"userId\":\"lea\"}")))).verifyComplete();
+        StepVerifier.create(userDeleted.apply(Flux.just(record("{\"userId\":\"lea\"}")))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(erasure).erase(eq("lea"), isNull());
     }
@@ -80,7 +80,7 @@ class UserDeletedConsumerTest {
 
         StepVerifier.create(userDeleted.apply(Flux.just(record("""
                         {"userId":"lea","deletedAt":"2026-10-15T14:03:27.123Z","reason":"USER_REQUEST"}"""))))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         verify(erasure).erase("lea", DELETED_AT);
     }
@@ -90,7 +90,7 @@ class UserDeletedConsumerTest {
     void userDeleted_shouldSkipAnUnreadableRecordAndContinue() {
         when(erasure.erase("lea", DELETED_AT)).thenReturn(Mono.empty());
 
-        StepVerifier.create(userDeleted.apply(Flux.just(record("{broken"), record(LEA_DELETED)))).verifyComplete();
+        StepVerifier.create(userDeleted.apply(Flux.just(record("{broken"), record(LEA_DELETED)))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(erasure).erase("lea", DELETED_AT);
     }
@@ -99,7 +99,7 @@ class UserDeletedConsumerTest {
     @DisplayName("a record without userId erases nobody")
     void userDeleted_shouldSkipARecordWithoutUserId() {
         StepVerifier.create(userDeleted.apply(Flux.just(record("{\"deletedAt\":\"2026-10-15T14:03:27Z\"}"),
-                record("{\"userId\":\" \"}")))).verifyComplete();
+                record("{\"userId\":\" \"}")))).expectComplete().verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(erasure);
     }
@@ -143,7 +143,7 @@ class UserDeletedConsumerTest {
     @Test
     @DisplayName("the result completes when the records do")
     void userDeleted_shouldCompleteWhenTheRecordsComplete() {
-        StepVerifier.create(userDeleted.apply(Flux.empty())).verifyComplete();
+        StepVerifier.create(userDeleted.apply(Flux.empty())).expectComplete().verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(erasure);
     }

@@ -16,6 +16,7 @@ import org.springframework.dao.DataAccessResourceFailureException;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.time.Duration;
 import java.util.Map;
 
 import static com.calendar.notifications.infrastructure.persistence.adapters.MongoNotificationRepositoryAdapterTest.assertStoreUnavailable;
@@ -45,7 +46,7 @@ class MongoPreferencesRepositoryAdapterTest {
     void find_shouldReadByUser() {
         when(repository.findById("bob")).thenReturn(Mono.just(ENTITY));
 
-        StepVerifier.create(adapter.find("bob")).expectNext(PREFERENCES).verifyComplete();
+        StepVerifier.create(adapter.find("bob")).expectNext(PREFERENCES).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -53,7 +54,7 @@ class MongoPreferencesRepositoryAdapterTest {
     void save_shouldWriteByUser() {
         when(repository.save(ENTITY)).thenReturn(Mono.just(ENTITY));
 
-        StepVerifier.create(adapter.save(PREFERENCES)).expectNext(PREFERENCES).verifyComplete();
+        StepVerifier.create(adapter.save(PREFERENCES)).expectNext(PREFERENCES).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -61,7 +62,7 @@ class MongoPreferencesRepositoryAdapterTest {
     void delete_shouldDeleteByUser() {
         when(repository.deleteById("bob")).thenReturn(Mono.empty());
 
-        StepVerifier.create(adapter.delete("bob")).verifyComplete();
+        StepVerifier.create(adapter.delete("bob")).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(repository).deleteById("bob");
     }

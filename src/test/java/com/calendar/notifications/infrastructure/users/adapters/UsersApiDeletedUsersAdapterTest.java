@@ -24,6 +24,9 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.io.IOException;
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -75,7 +78,7 @@ class UsersApiDeletedUsersAdapterTest {
 
     @Test
     void page_shouldSendTheReaderSecretAndTheLimit_withoutAfter_onTheFirstPage() {
-        StepVerifier.create(adapter().page(null, 500)).expectNextCount(1).verifyComplete();
+        StepVerifier.create(adapter().page(null, 500)).expectNextCount(1).expectComplete().verify(Duration.ofSeconds(10));
 
         ClientRequest request = sent.getFirst();
         assertThat(request.url().toString()).isEqualTo(URL + "/user-service/internal/deleted-users?limit=500");
@@ -85,7 +88,7 @@ class UsersApiDeletedUsersAdapterTest {
     @Test
     @DisplayName("the cursor is sent as a query value, encoded whatever characters it holds")
     void page_shouldEncodeTheCursor_whenFollowingAPage() {
-        StepVerifier.create(adapter().page("a+b/c=&d", 500)).expectNextCount(1).verifyComplete();
+        StepVerifier.create(adapter().page("a+b/c=&d", 500)).expectNextCount(1).expectComplete().verify(Duration.ofSeconds(10));
 
         assertThat(sent.getFirst().url().getRawQuery()).isEqualTo("limit=500&after=a%2Bb%2Fc%3D%26d");
     }
@@ -101,7 +104,7 @@ class UsersApiDeletedUsersAdapterTest {
                 .expectNext(new DeletedUsersPage(
                         List.of(new DeletedUser("89a380b8-0000-4000-8000-000000000001", DELETED_AT)),
                         "MjAyNi0xMC0xNVQxNDowMzoyNy4xMjNafDg5YTM4MGI4"))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -109,7 +112,7 @@ class UsersApiDeletedUsersAdapterTest {
     void page_shouldMapAnEmptyItemsList_toAnEmptyLastPage() {
         StepVerifier.create(adapter().page(null, 500))
                 .expectNext(new DeletedUsersPage(List.of(), null))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @ParameterizedTest
@@ -120,7 +123,7 @@ class UsersApiDeletedUsersAdapterTest {
 
         StepVerifier.create(adapter().page(null, 500))
                 .expectErrorMatches(UsersApiDeletedUsersAdapterTest::usersUnavailable)
-                .verify();
+                .verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -131,7 +134,7 @@ class UsersApiDeletedUsersAdapterTest {
                     assertThat(usersUnavailable(error)).isTrue();
                     assertThat(error.getCause()).as("nothing failed underneath: the adapter is not configured").isNull();
                 })
-                .verify();
+                .verify(Duration.ofSeconds(10));
 
         assertThat(sent).isEmpty();
     }
@@ -141,7 +144,7 @@ class UsersApiDeletedUsersAdapterTest {
     void page_shouldFailWithoutCalling_whenTheSecretIsNotSet() {
         StepVerifier.create(adapter(URL, " ").page(null, 500))
                 .expectErrorMatches(UsersApiDeletedUsersAdapterTest::usersUnavailable)
-                .verify();
+                .verify(Duration.ofSeconds(10));
 
         assertThat(sent).isEmpty();
     }
@@ -157,7 +160,7 @@ class UsersApiDeletedUsersAdapterTest {
                     assertThat(error.getCause()).isInstanceOfSatisfying(WebClientResponseException.class,
                             cause -> assertThat(cause.getStatusCode().value()).isEqualTo(status));
                 })
-                .verify();
+                .verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -166,7 +169,7 @@ class UsersApiDeletedUsersAdapterTest {
 
         StepVerifier.create(adapter().page(null, 500))
                 .expectErrorMatches(UsersApiDeletedUsersAdapterTest::usersUnavailable)
-                .verify();
+                .verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -175,7 +178,7 @@ class UsersApiDeletedUsersAdapterTest {
 
         StepVerifier.create(adapter().page(null, 500))
                 .expectErrorMatches(UsersApiDeletedUsersAdapterTest::usersUnavailable)
-                .verify();
+                .verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -185,7 +188,7 @@ class UsersApiDeletedUsersAdapterTest {
 
         StepVerifier.create(adapter().page(null, 500))
                 .expectErrorMatches(UsersApiDeletedUsersAdapterTest::usersUnavailable)
-                .verify();
+                .verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -195,7 +198,7 @@ class UsersApiDeletedUsersAdapterTest {
 
         StepVerifier.create(adapter().page(null, 500))
                 .expectErrorMatches(UsersApiDeletedUsersAdapterTest::usersUnavailable)
-                .verify();
+                .verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -209,7 +212,7 @@ class UsersApiDeletedUsersAdapterTest {
                     assertThat(error.getCause()).as("the client's failure is kept for the logs").isNotNull();
                     assertThat(error).rootCause().isSameAs(refused);
                 })
-                .verify();
+                .verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -225,5 +228,29 @@ class UsersApiDeletedUsersAdapterTest {
                     assertThat(error.getCause()).isInstanceOf(TimeoutException.class);
                 })
                 .verify();
+    }
+
+    /**
+     * The adapter keeps the client failure as the cause, which GlobalErrorHandler logs with its
+     * whole stack: built here from a real refused connection, with secrets in the URL's userinfo,
+     * in the query and in the reader-secret header, none of them may appear.
+     */
+    @Test
+    @DisplayName("a refused connection fails without the reader secret or URL credentials anywhere in the logged stack")
+    void page_shouldNotCarrySecrets_whenWelyUsersRefusesTheConnection() {
+        UsersApiDeletedUsersAdapter real = new UsersApiDeletedUsersAdapter(
+                new UsersApiClientConfig().usersWebClient("http://reader:s3cr3t-userinfo@127.0.0.1:1", "s3cr3t-header"),
+                Mappers.getMapper(DeletedUsersMapper.class), "http://127.0.0.1:1", "s3cr3t-header");
+
+        StepVerifier.create(real.page("s3cr3t-cursor", 500))
+                .expectErrorSatisfies(error -> {
+                    assertThat(usersUnavailable(error)).isTrue();
+                    StringWriter logged = new StringWriter();
+                    error.printStackTrace(new PrintWriter(logged));
+                    assertThat(logged.toString())
+                            .contains("127.0.0.1")
+                            .doesNotContain("s3cr3t");
+                })
+                .verify(Duration.ofSeconds(15));
     }
 }

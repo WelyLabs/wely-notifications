@@ -8,6 +8,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
+import org.springframework.http.ResponseEntity;
+import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
+import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -17,6 +21,7 @@ import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class GlobalErrorHandlerTest {
 
@@ -114,7 +119,7 @@ class GlobalErrorHandlerTest {
                 .jsonPath("$.type").isEqualTo("https://welylabs.app/problems/ntf-bus-001")
                 .jsonPath("$.instance").isEqualTo("/invalid-subscription")
                 .jsonPath("$.timestamp").exists()
-                .jsonPath("$.requestId").value(GlobalErrorHandlerTest::assertNotBlank);
+                .jsonPath("$." + GlobalErrorHandler.REQUEST_ID_PROPERTY).value(GlobalErrorHandlerTest::assertNotBlank);
     }
 
     @Test
@@ -132,7 +137,7 @@ class GlobalErrorHandlerTest {
                 .jsonPath("$.type").isEqualTo("https://welylabs.app/problems/ntf-tec-001")
                 .jsonPath("$.instance").isEqualTo("/store-down")
                 .jsonPath("$.timestamp").exists()
-                .jsonPath("$.requestId").value(GlobalErrorHandlerTest::assertNotBlank);
+                .jsonPath("$." + GlobalErrorHandler.REQUEST_ID_PROPERTY).value(GlobalErrorHandlerTest::assertNotBlank);
 
         assertThat(technicalFailures("NTF-TEC-001")).isEqualTo(1.0);
     }
@@ -161,7 +166,7 @@ class GlobalErrorHandlerTest {
                 .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON)
                 .expectBody()
                 .jsonPath("$.code").isEqualTo("NTF-TEC-001")
-                .jsonPath("$.requestId").value(GlobalErrorHandlerTest::assertNotBlank);
+                .jsonPath("$." + GlobalErrorHandler.REQUEST_ID_PROPERTY).value(GlobalErrorHandlerTest::assertNotBlank);
     }
 
     @Test
@@ -203,7 +208,7 @@ class GlobalErrorHandlerTest {
                 .expectBody()
                 .jsonPath("$.code").isEqualTo(GlobalErrorHandler.VALIDATION_FAILED_CODE)
                 .jsonPath("$.errors.name").exists()
-                .jsonPath("$.requestId").value(GlobalErrorHandlerTest::assertNotBlank);
+                .jsonPath("$." + GlobalErrorHandler.REQUEST_ID_PROPERTY).value(GlobalErrorHandlerTest::assertNotBlank);
     }
 
     @Test
@@ -213,15 +218,15 @@ class GlobalErrorHandlerTest {
                 .exchange()
                 .expectStatus().is5xxServerError()
                 .expectBody()
-                .jsonPath("$.code").isEqualTo(GlobalErrorHandler.UNEXPECTED_ERROR_CODE)
-                .jsonPath("$.requestId").value(GlobalErrorHandlerTest::assertNotBlank)
+                .jsonPath("$.code").isEqualTo(GlobalErrorHandler.UNEXPECTED_FAILURE_CODE)
+                .jsonPath("$." + GlobalErrorHandler.REQUEST_ID_PROPERTY).value(GlobalErrorHandlerTest::assertNotBlank)
                 .jsonPath("$.detail").value(detail -> {
                     if (detail.toString().contains("hunter2") || detail.toString().contains("mongodb")) {
                         throw new AssertionError("the original message leaked into the response");
                     }
                 });
 
-        assertThat(technicalFailures(GlobalErrorHandler.UNEXPECTED_ERROR_CODE)).isEqualTo(1.0);
+        assertThat(technicalFailures(GlobalErrorHandler.UNEXPECTED_FAILURE_CODE)).isEqualTo(1.0);
     }
 
     @Test
@@ -233,7 +238,7 @@ class GlobalErrorHandlerTest {
                 .expectBody()
                 .jsonPath("$.title").isEqualTo("Not Found")
                 .jsonPath("$.code").isEqualTo(GlobalErrorHandler.REQUEST_REFUSED_CODE)
-                .jsonPath("$.requestId").value(GlobalErrorHandlerTest::assertNotBlank);
+                .jsonPath("$." + GlobalErrorHandler.REQUEST_ID_PROPERTY).value(GlobalErrorHandlerTest::assertNotBlank);
     }
 
     @Test
@@ -244,5 +249,60 @@ class GlobalErrorHandlerTest {
                 .expectStatus().isEqualTo(405)
                 .expectBody()
                 .jsonPath("$.code").isEqualTo(GlobalErrorHandler.REQUEST_REFUSED_CODE);
+    }
+
+    // --- handle: the same mapping for failures no controller saw -------------------------------
+
+    private ResponseEntity<ProblemDetail> handled(Throwable failure) {
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/outside"));
+        return new GlobalErrorHandler(registry).handle(failure, exchange);
+    }
+
+    private static void assertProblem(ResponseEntity<ProblemDetail> response, int status, String code) {
+        assertThat(response.getStatusCode().value()).isEqualTo(status);
+        assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_PROBLEM_JSON);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getProperties())
+                .containsEntry("code", code)
+                .containsKey("timestamp");
+        assertNotBlank(response.getBody().getProperties().get(GlobalErrorHandler.REQUEST_ID_PROPERTY));
+        assertThat(response.getBody().getInstance()).hasToString("/outside");
+    }
+
+    @Test
+    void handle_shouldMapABusinessFailure_withoutCountingIt() {
+        assertProblem(handled(new BusinessException(BusinessErrorCode.ACCOUNT_DELETED)), 410, "NTF-BUS-002");
+
+        assertThat(registry.find(GlobalErrorHandler.TECHNICAL_ERRORS_METRIC).counters()).isEmpty();
+    }
+
+    @Test
+    void handle_shouldMapAndCountATechnicalFailure() {
+        assertProblem(handled(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)), 502, "NTF-TEC-001");
+
+        assertThat(technicalFailures("NTF-TEC-001")).isEqualTo(1.0);
+    }
+
+    @Test
+    void handle_shouldKeepTheStatus_ofAResponseStatusException() {
+        assertProblem(handled(new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE)), 415,
+                GlobalErrorHandler.REQUEST_REFUSED_CODE);
+    }
+
+    @Test
+    void handle_shouldMapAndCountAnUnexpectedException() {
+        ResponseEntity<ProblemDetail> response = handled(new IllegalStateException("mongodb://admin:hunter2@host"));
+
+        assertProblem(response, 500, GlobalErrorHandler.UNEXPECTED_FAILURE_CODE);
+        assertThat(response.getBody().getDetail()).doesNotContain("hunter2");
+        assertThat(technicalFailures(GlobalErrorHandler.UNEXPECTED_FAILURE_CODE)).isEqualTo(1.0);
+    }
+
+    @Test
+    @DisplayName("an Error is not turned into a response")
+    void handle_shouldRefuseAnError() {
+        assertThatThrownBy(() -> handled(new StackOverflowError()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasCauseInstanceOf(StackOverflowError.class);
     }
 }

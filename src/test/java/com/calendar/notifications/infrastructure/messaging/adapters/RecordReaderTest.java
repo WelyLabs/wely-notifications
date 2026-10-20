@@ -8,6 +8,7 @@ import reactor.test.StepVerifier;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 
 class RecordReaderTest {
 
@@ -24,12 +25,12 @@ class RecordReaderTest {
                         {"type":"REQUESTED","fromUserId":"lea","fromUserName":"Léa","toUserId":"bob","extra":1}"""),
                         FriendshipChangedDTO.class, "T"))
                 .expectNext(new FriendshipChangedDTO("REQUESTED", "lea", "Léa", "bob", null, null))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
     @DisplayName("an unreadable record is empty, not an error")
     void read_shouldBeEmpty_whenTheRecordIsUnreadable() {
-        StepVerifier.create(reader.read(record("{not json"), FriendshipChangedDTO.class, "T")).verifyComplete();
+        StepVerifier.create(reader.read(record("{not json"), FriendshipChangedDTO.class, "T")).expectComplete().verify(Duration.ofSeconds(10));
     }
 }

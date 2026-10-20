@@ -17,6 +17,7 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.time.Duration;
 import java.time.ZoneId;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -53,7 +54,7 @@ class MessagesConsumerTest {
     void messages_shouldNotifyTheReceiver() {
         when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
 
-        StepVerifier.create(consumer.messages().apply(Flux.just(message("bob", "TEXT", "NEW")))).verifyComplete();
+        StepVerifier.create(consumer.messages().apply(Flux.just(message("bob", "TEXT", "NEW")))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(notificationService, timeout(2000)).notify(Notification.draft("bob", NotificationType.MESSAGE, "Léa",
                 "Salut", "/chat/conv1", "conv1", "lea"));
@@ -62,7 +63,7 @@ class MessagesConsumerTest {
     @Test
     @DisplayName("system notices and updates notify nobody")
     void messages_shouldIgnoreSystemNoticesAndUpdates() {
-        StepVerifier.create(consumer.messages().apply(Flux.just(message("bob", "SYSTEM", "NEW"), message("bob", "TEXT", "UPDATED")))).verifyComplete();
+        StepVerifier.create(consumer.messages().apply(Flux.just(message("bob", "SYSTEM", "NEW"), message("bob", "TEXT", "UPDATED")))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(notificationService, never()).notify(any());
     }
@@ -75,7 +76,7 @@ class MessagesConsumerTest {
                 .thenAnswer(call -> Mono.just(call.getArgument(0)));
 
         StepVerifier.create(consumer.messages().apply(Flux.just(CallEventsConsumerTest.record("[]"), message("bob", "TEXT", "NEW"),
-                message("carl", "TEXT", "NEW")))).verifyComplete();
+                message("carl", "TEXT", "NEW")))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(notificationService, timeout(2000).times(2)).notify(any());
     }

@@ -98,7 +98,7 @@ class NotificationServiceTest {
                     assertThat(saved.createdAt()).isEqualTo(NOW);
                     assertThat(saved.title()).isEqualTo("Demande d'ami#1");
                 })
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         ArgumentCaptor<LiveUpdate> updates = ArgumentCaptor.forClass(LiveUpdate.class);
         verify(live, times(2)).publish(eq("bob"), updates.capture());
@@ -122,7 +122,7 @@ class NotificationServiceTest {
 
         StepVerifier.create(service.notify(message()))
                 .assertNext(saved -> assertThat(saved.title()).isEqualTo("Léa#3"))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         verify(repository, never()).insert(any());
     }
@@ -136,7 +136,7 @@ class NotificationServiceTest {
 
         StepVerifier.create(service.notify(friendRequest()))
                 .expectError(TechnicalException.class)
-                .verify();
+                .verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(live, pushService);
     }
@@ -146,7 +146,7 @@ class NotificationServiceTest {
     void notify_shouldDropTheDraftWithoutWriting_whenTheRecipientIsErased() {
         deleted("bob");
 
-        StepVerifier.create(service.notify(friendRequest())).verifyComplete();
+        StepVerifier.create(service.notify(friendRequest())).expectComplete().verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(repository, live, pushService);
     }
@@ -156,7 +156,7 @@ class NotificationServiceTest {
     void notify_shouldDropTheDraftWithoutWriting_whenTheActorIsErased() {
         deleted("lea");
 
-        StepVerifier.create(service.notify(message())).verifyComplete();
+        StepVerifier.create(service.notify(message())).expectComplete().verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(repository, live, pushService);
     }
@@ -169,7 +169,7 @@ class NotificationServiceTest {
         when(repository.deleteOwned("bob", "n1")).thenReturn(Mono.empty());
         when(repository.countUnread("bob")).thenReturn(Mono.just(2L));
 
-        StepVerifier.create(service.notify(friendRequest())).verifyComplete();
+        StepVerifier.create(service.notify(friendRequest())).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(repository).deleteOwned("bob", "n1");
         verify(live).publish("bob", new LiveUpdate.UnreadChanged(2));
@@ -183,7 +183,7 @@ class NotificationServiceTest {
         when(markers.anyDeleted(any()))
                 .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
 
-        StepVerifier.create(service.notify(friendRequest())).expectError(TechnicalException.class).verify();
+        StepVerifier.create(service.notify(friendRequest())).expectError(TechnicalException.class).verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(repository, live, pushService);
     }
@@ -196,7 +196,7 @@ class NotificationServiceTest {
 
         StepVerifier.create(service.list("bob", before, 10))
                 .assertNext(found -> assertThat(found.title()).isEqualTo("Demande d'ami#1"))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -218,7 +218,7 @@ class NotificationServiceTest {
     void unreadCount_shouldCountTheRecipientsUnread() {
         when(repository.countUnread("bob")).thenReturn(Mono.just(7L));
 
-        StepVerifier.create(service.unreadCount("bob")).expectNext(7L).verifyComplete();
+        StepVerifier.create(service.unreadCount("bob")).expectNext(7L).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -227,7 +227,7 @@ class NotificationServiceTest {
         when(repository.markRead("bob", List.of("n1"), NOW)).thenReturn(Mono.just(1L));
         when(repository.countUnread("bob")).thenReturn(Mono.just(0L));
 
-        StepVerifier.create(service.markRead("bob", List.of("n1"))).verifyComplete();
+        StepVerifier.create(service.markRead("bob", List.of("n1"))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(live).publish("bob", new LiveUpdate.UnreadChanged(0));
     }
@@ -238,7 +238,7 @@ class NotificationServiceTest {
         when(repository.markGroupRead("bob", "c1", NOW)).thenReturn(Mono.just(1L));
         when(repository.countUnread("bob")).thenReturn(Mono.just(2L));
 
-        StepVerifier.create(service.markGroupRead("bob", "c1")).verifyComplete();
+        StepVerifier.create(service.markGroupRead("bob", "c1")).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(live).publish("bob", new LiveUpdate.UnreadChanged(2));
     }
@@ -249,7 +249,7 @@ class NotificationServiceTest {
         when(repository.markAllRead("bob", NOW)).thenReturn(Mono.just(5L));
         when(repository.countUnread("bob")).thenReturn(Mono.just(0L));
 
-        StepVerifier.create(service.markAllRead("bob")).verifyComplete();
+        StepVerifier.create(service.markAllRead("bob")).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(live).publish("bob", new LiveUpdate.UnreadChanged(0));
     }
@@ -261,7 +261,7 @@ class NotificationServiceTest {
                 .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
         when(repository.countUnread("bob")).thenReturn(Mono.just(0L));
 
-        StepVerifier.create(service.markAllRead("bob")).expectError(TechnicalException.class).verify();
+        StepVerifier.create(service.markAllRead("bob")).expectError(TechnicalException.class).verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(live);
     }
@@ -277,7 +277,7 @@ class NotificationServiceTest {
         StepVerifier.create(service.openStream("bob").flatMapMany(updates -> updates))
                 .expectNext(new LiveUpdate.UnreadChanged(3))
                 .expectNext(added)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         verify(live, never()).close(any());
     }
@@ -309,7 +309,7 @@ class NotificationServiceTest {
         StepVerifier.create(service.openStream("bob"))
                 .expectErrorSatisfies(error -> assertThat(((BusinessException) error).getErrorCode())
                         .isEqualTo(BusinessErrorCode.ACCOUNT_DELETED))
-                .verify();
+                .verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(live, repository);
     }
@@ -319,7 +319,7 @@ class NotificationServiceTest {
     void announceUnreadCount_shouldPublishTheRecipientsCount() {
         when(repository.countUnread("bob")).thenReturn(Mono.just(6L));
 
-        StepVerifier.create(service.announceUnreadCount("bob")).verifyComplete();
+        StepVerifier.create(service.announceUnreadCount("bob")).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(live).publish("bob", new LiveUpdate.UnreadChanged(6));
     }
@@ -337,7 +337,7 @@ class NotificationServiceTest {
 
         StepVerifier.create(service.notifyCall(ringing, call))
                 .assertNext(saved -> assertThat(saved.title()).isEqualTo("Appel audio#1"))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         ArgumentCaptor<Notification> delivered = ArgumentCaptor.forClass(Notification.class);
         verify(pushService).deliverCall(delivered.capture(), eq(call));
@@ -353,7 +353,7 @@ class NotificationServiceTest {
 
         StepVerifier.create(service.notifyCall(Notification.draft("bob", NotificationType.CALL_INCOMING, "Appel audio",
                 "On t'appelle sur Wely", "/call/k1", "k1", "lea"), new IncomingCall("k1", "lea", null, CallMedia.AUDIO, "c")))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(repository, live, pushService);
     }

@@ -18,6 +18,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.time.Duration;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -46,7 +47,7 @@ class PreferencesControllerTest {
     void get_shouldReadTheCallersPreferences() {
         when(pushService.preferences("bob")).thenReturn(Mono.just(NotificationPreferences.defaults("bob")));
 
-        StepVerifier.create(controller.get(jwt)).expectNext(new PreferencesDTO(true, true, true, true, true)).verifyComplete();
+        StepVerifier.create(controller.get(jwt)).expectNext(new PreferencesDTO(true, true, true, true, true)).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -58,7 +59,7 @@ class PreferencesControllerTest {
 
         StepVerifier.create(controller.update(jwt, new PreferencesDTO(false, true, true, true, false)))
                 .expectNext(new PreferencesDTO(false, true, true, true, false))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -70,6 +71,6 @@ class PreferencesControllerTest {
         StepVerifier.create(controller.update(jwt, new PreferencesDTO(true, true, true, true, true)))
                 .expectErrorSatisfies(error -> assertThat(((BusinessException) error).getErrorCode())
                         .isEqualTo(BusinessErrorCode.ACCOUNT_DELETED))
-                .verify();
+                .verify(Duration.ofSeconds(10));
     }
 }

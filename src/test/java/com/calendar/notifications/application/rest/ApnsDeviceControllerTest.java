@@ -19,6 +19,8 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.time.Duration;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -49,7 +51,7 @@ class ApnsDeviceControllerTest {
         ApnsDevice expected = new ApnsDevice(null, TOKEN, ApnsEnvironment.PRODUCTION, ApnsPushKind.ALERT, null);
         when(pushService.registerDevice("bob", expected)).thenReturn(Mono.empty());
 
-        StepVerifier.create(controller.register(jwt, new ApnsDeviceRequest(TOKEN, "PRODUCTION", null))).verifyComplete();
+        StepVerifier.create(controller.register(jwt, new ApnsDeviceRequest(TOKEN, "PRODUCTION", null))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(pushService).registerDevice("bob", expected);
     }
@@ -64,7 +66,7 @@ class ApnsDeviceControllerTest {
         StepVerifier.create(controller.register(jwt, new ApnsDeviceRequest(TOKEN, "SANDBOX", "VOIP")))
                 .expectErrorSatisfies(error -> assertThat(((BusinessException) error).getErrorCode())
                         .isEqualTo(BusinessErrorCode.ACCOUNT_DELETED))
-                .verify();
+                .verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -73,7 +75,7 @@ class ApnsDeviceControllerTest {
         when(jwt.getClaimAsString("businessId")).thenReturn("bob");
         when(pushService.unregisterDevice("bob", TOKEN)).thenReturn(Mono.empty());
 
-        StepVerifier.create(controller.unregister(jwt, TOKEN)).verifyComplete();
+        StepVerifier.create(controller.unregister(jwt, TOKEN)).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(pushService).unregisterDevice("bob", TOKEN);
     }

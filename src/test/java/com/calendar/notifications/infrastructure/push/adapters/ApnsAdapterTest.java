@@ -120,7 +120,7 @@ class ApnsAdapterTest {
     void send_shouldPostASignedAlertToProduction() throws Exception {
         StepVerifier.create(adapter().send(iphone(ApnsEnvironment.PRODUCTION), ringing()))
                 .expectNext(PushResult.DELIVERED)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         MockClientHttpRequest request = sent.getFirst();
         HttpHeaders headers = request.getHeaders();
@@ -150,7 +150,7 @@ class ApnsAdapterTest {
     void send_shouldUseTheSandboxAndNormalPriority_forADevelopmentBuild() {
         StepVerifier.create(adapter().send(iphone(ApnsEnvironment.SANDBOX), friendRequest()))
                 .expectNext(PushResult.DELIVERED)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         MockClientHttpRequest request = sent.getFirst();
         assertThat(request.getURI()).isEqualTo(URI.create("https://api.sandbox.push.apple.com/3/device/" + TOKEN));
@@ -168,7 +168,7 @@ class ApnsAdapterTest {
 
         StepVerifier.create(adapter().send(iphone(ApnsEnvironment.PRODUCTION), untagged))
                 .expectNext(PushResult.DELIVERED)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         MockClientHttpRequest request = sent.getFirst();
         assertThat(request.getHeaders().containsHeader("apns-collapse-id")).isFalse();
@@ -194,7 +194,7 @@ class ApnsAdapterTest {
 
         StepVerifier.create(adapter().send(iphone(ApnsEnvironment.PRODUCTION), ringing()))
                 .expectNext(PushResult.GONE)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @ParameterizedTest
@@ -205,7 +205,7 @@ class ApnsAdapterTest {
 
         StepVerifier.create(adapter().send(iphone(ApnsEnvironment.PRODUCTION), ringing()))
                 .expectNext(PushResult.GONE)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @ParameterizedTest
@@ -217,7 +217,7 @@ class ApnsAdapterTest {
 
         StepVerifier.create(adapter().send(iphone(ApnsEnvironment.PRODUCTION), ringing()))
                 .expectNext(PushResult.FAILED)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @ParameterizedTest
@@ -228,7 +228,7 @@ class ApnsAdapterTest {
 
         StepVerifier.create(adapter().send(iphone(ApnsEnvironment.PRODUCTION), ringing()))
                 .expectNext(PushResult.FAILED)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -239,7 +239,7 @@ class ApnsAdapterTest {
 
         StepVerifier.create(adapter().send(iphone(ApnsEnvironment.PRODUCTION), ringing()))
                 .expectNext(PushResult.FAILED)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -251,7 +251,7 @@ class ApnsAdapterTest {
 
         StepVerifier.create(slow.send(iphone(ApnsEnvironment.PRODUCTION), ringing()))
                 .expectNext(PushResult.FAILED)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -268,7 +268,7 @@ class ApnsAdapterTest {
         assertThat(off.enabled()).isFalse();
         StepVerifier.create(off.send(iphone(ApnsEnvironment.PRODUCTION), ringing()))
                 .expectNext(PushResult.FAILED)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
         assertThat(sent).isEmpty();
     }
 
@@ -348,7 +348,7 @@ class ApnsAdapterTest {
     void sendVoip_shouldPostARing() throws Exception {
         VoipPush ring = new VoipPush.Ring("k1", "Appel vidéo", "lea", CallMedia.VIDEO, "conv1", "/call/k1");
 
-        StepVerifier.create(adapter().sendVoip(pushKit(), ring)).expectNext(PushResult.DELIVERED).verifyComplete();
+        StepVerifier.create(adapter().sendVoip(pushKit(), ring)).expectNext(PushResult.DELIVERED).expectComplete().verify(Duration.ofSeconds(10));
 
         MockClientHttpRequest request = sent.getFirst();
         HttpHeaders headers = request.getHeaders();
@@ -377,7 +377,7 @@ class ApnsAdapterTest {
     void sendVoip_shouldPostAHangup() {
         StepVerifier.create(adapter().sendVoip(pushKit(), new VoipPush.Hangup("k1")))
                 .expectNext(PushResult.DELIVERED)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         MockClientHttpRequest request = sent.getFirst();
         assertThat(request.getHeaders().getFirst("apns-push-type")).isEqualTo("voip");
@@ -395,12 +395,12 @@ class ApnsAdapterTest {
         answer = refusal(400, "{\"reason\":\"BadDeviceToken\"}");
         StepVerifier.create(adapter().sendVoip(pushKit(), new VoipPush.Hangup("k1")))
                 .expectNext(PushResult.GONE)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         answer = refusal(400, "{\"reason\":\"DeviceTokenNotForTopic\"}");
         StepVerifier.create(adapter().sendVoip(pushKit(), new VoipPush.Hangup("k1")))
                 .expectNext(PushResult.FAILED)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -410,7 +410,7 @@ class ApnsAdapterTest {
 
         StepVerifier.create(off.sendVoip(pushKit(), new VoipPush.Hangup("k1")))
                 .expectNext(PushResult.FAILED)
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
         assertThat(sent).isEmpty();
     }
 }

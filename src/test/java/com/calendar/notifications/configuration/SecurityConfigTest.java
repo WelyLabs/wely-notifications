@@ -7,13 +7,17 @@ import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.NotificationRepository;
 import com.calendar.notifications.domain.ports.PreferencesRepository;
 import com.calendar.notifications.exception.GlobalErrorHandler;
+import com.calendar.notifications.exception.TechnicalErrorCode;
+import com.calendar.notifications.exception.TechnicalException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.security.oauth2.jwt.BadJwtException;
 import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -21,6 +25,7 @@ import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -75,6 +80,7 @@ class SecurityConfigTest {
         return WebTestClient.bindToApplicationContext(context)
                 .apply(springSecurity())
                 .configureClient()
+                .responseTimeout(Duration.ofSeconds(30))
                 .build();
     }
 
@@ -304,15 +310,135 @@ class SecurityConfigTest {
     }
 
     @Test
-    @DisplayName("the health probes answer without a token, the rest of actuator does not")
-    void apiHttpSecurity_shouldOpenTheProbesOnly() {
+    @DisplayName("the health probes and the Prometheus scrape answer without a token, the rest of actuator does not")
+    void apiHttpSecurity_shouldOpenTheProbesAndPrometheusOnly() {
         client().get().uri("/actuator/health/liveness").exchange().expectStatus().isOk();
         client().get().uri("/actuator/health/readiness").exchange().expectStatus().isOk();
+        client().get().uri("/actuator/prometheus").exchange().expectStatus().isOk();
         client().get().uri("/actuator/env").exchange().expectStatus().isUnauthorized();
+        client().get().uri("/actuator/metrics").exchange().expectStatus().isUnauthorized();
+    }
+
+    @Test
+    @DisplayName("with a token, actuator still exposes nothing but health, info and prometheus")
+    void apiHttpSecurity_shouldNotExposeOtherActuatorEndpoints() {
+        as("bob").get().uri("/actuator/env").exchange().expectStatus().isNotFound();
+        as("bob").get().uri("/actuator/metrics").exchange().expectStatus().isNotFound();
+    }
+
+    @Test
+    @DisplayName("a counted technical failure shows on /actuator/prometheus as wely_errors_technical_total")
+    void apiHttpSecurity_shouldServeTheTechnicalErrorCounter_onPrometheus() {
+        when(preferencesRepository.find("bob"))
+                .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
+        as("bob").get().uri("/notifications-service/preferences").exchange().expectStatus().isEqualTo(502);
+
+        client().get().uri("/actuator/prometheus")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(String.class)
+                .value(metrics -> assertThat(metrics).contains("wely_errors_technical_total{code=\"NTF-TEC-001\""));
+    }
+
+    // --- Security errors answer our problem ----------------------------------------------------
+
+    @Test
+    @DisplayName("no token: 401 NTF-REQ-001 as our problem, keeping the Bearer challenge")
+    void apiHttpSecurity_shouldAnswerOurProblem_withoutAToken() {
+        client().get().uri("/notifications-service/notifications")
+                .exchange()
+                .expectStatus().isUnauthorized()
+                .expectHeader().valueEquals(HttpHeaders.WWW_AUTHENTICATE, "Bearer")
+                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON)
+                .expectBody()
+                .jsonPath("$.code").isEqualTo("NTF-REQ-001")
+                .jsonPath("$.status").isEqualTo(401)
+                .jsonPath("$.instance").isEqualTo("/notifications-service/notifications")
+                .jsonPath("$." + GlobalErrorHandler.REQUEST_ID_PROPERTY).value(id -> assertThat(id.toString()).isNotBlank());
+    }
+
+    @Test
+    @DisplayName("a bad token: 401 NTF-REQ-001, keeping Spring's invalid_token challenge")
+    void apiHttpSecurity_shouldAnswerOurProblem_forABadToken() {
+        when(jwtDecoder.decode("not-a-jwt")).thenReturn(Mono.error(new BadJwtException("malformed")));
+
+        client().get().uri("/notifications-service/notifications")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer not-a-jwt")
+                .exchange()
+                .expectStatus().isUnauthorized()
+                .expectHeader().value(HttpHeaders.WWW_AUTHENTICATE,
+                        challenge -> assertThat(challenge).startsWith("Bearer").contains("error=\"invalid_token\""))
+                .expectBody()
+                .jsonPath("$.code").isEqualTo("NTF-REQ-001");
+    }
+
+    @Test
+    @DisplayName("no token on the SSE route: still our problem+json, not an event")
+    void apiHttpSecurity_shouldAnswerProblemJson_onTheStreamWithoutAToken() {
+        client().get().uri("/notifications-service/notifications/stream")
+                .accept(MediaType.TEXT_EVENT_STREAM)
+                .exchange()
+                .expectStatus().isUnauthorized()
+                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON)
+                .expectBody()
+                .jsonPath("$.code").isEqualTo("NTF-REQ-001");
     }
 
     @Test
     void jwtDecoder_shouldBeConfigured() {
         assertThat(config.jwtDecoder()).isNotNull();
+    }
+
+    // --- Framework-decided errors answer our problem, not Boot's -------------------------------
+    // Boot registers its own ProblemDetailsExceptionHandler at @Order(0): these run on the real
+    // context, where both advices are present, which a test binding GlobalErrorHandler alone cannot see.
+
+    private static void assertOurProblem(WebTestClient.ResponseSpec response, int status, String code) {
+        response.expectStatus().isEqualTo(status)
+                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON)
+                .expectBody()
+                .jsonPath("$.status").isEqualTo(status)
+                .jsonPath("$.code").isEqualTo(code)
+                .jsonPath("$.timestamp").exists()
+                .jsonPath("$." + GlobalErrorHandler.REQUEST_ID_PROPERTY).value(id -> assertThat(id.toString()).isNotBlank());
+    }
+
+    @Test
+    void handleResponseStatusException_shouldAnswerOurProblem_forAnUnknownPath() {
+        assertOurProblem(as("bob").get().uri("/notifications-service/nowhere").exchange(),
+                404, GlobalErrorHandler.REQUEST_REFUSED_CODE);
+    }
+
+    @Test
+    void handleResponseStatusException_shouldAnswerOurProblem_forAMethodNotAllowed() {
+        assertOurProblem(as("bob").delete().uri("/notifications-service/preferences").exchange(),
+                405, GlobalErrorHandler.REQUEST_REFUSED_CODE);
+    }
+
+    @Test
+    void handleResponseStatusException_shouldAnswerOurProblem_forAnUnsupportedContentType() {
+        assertOurProblem(as("bob").put().uri("/notifications-service/preferences")
+                        .contentType(MediaType.TEXT_PLAIN)
+                        .bodyValue("calls=true")
+                        .exchange(),
+                415, GlobalErrorHandler.REQUEST_REFUSED_CODE);
+    }
+
+    @Test
+    void handleResponseStatusException_shouldAnswerOurProblem_forAnUnreadableBody() {
+        assertOurProblem(as("bob").put().uri("/notifications-service/preferences")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .bodyValue("{not json")
+                        .exchange(),
+                400, GlobalErrorHandler.REQUEST_REFUSED_CODE);
+    }
+
+    @Test
+    void handleValidationException_shouldAnswerOurProblem_forAnInvalidField() {
+        assertOurProblem(as("bob").put().uri("/notifications-service/push/apns-devices")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .bodyValue("{\"environment\":\"PRODUCTION\"}")
+                        .exchange(),
+                400, GlobalErrorHandler.VALIDATION_FAILED_CODE);
     }
 }

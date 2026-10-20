@@ -1,5 +1,6 @@
 package com.calendar.notifications.configuration;
 
+import com.calendar.notifications.exception.GlobalErrorHandler;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,6 +17,8 @@ import io.swagger.v3.oas.models.Paths;
 import io.swagger.v3.oas.models.media.Schema;
 import io.swagger.v3.oas.models.responses.ApiResponse;
 import io.swagger.v3.oas.models.responses.ApiResponses;
+
+import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -40,7 +43,11 @@ class OpenApiConfigTest {
     private int port;
 
     private WebTestClient client() {
-        return WebTestClient.bindToServer().baseUrl("http://localhost:" + port).build();
+        // Generous: the first request generates the whole document, slow on a loaded machine.
+        return WebTestClient.bindToServer()
+                .baseUrl("http://localhost:" + port)
+                .responseTimeout(Duration.ofSeconds(30))
+                .build();
     }
 
     @Test
@@ -101,7 +108,7 @@ class OpenApiConfigTest {
         Schema<?> problem = openApi.getComponents().getSchemas().get(OpenApiConfig.PROBLEM_SCHEMA);
         assertThat(problem).isNotNull();
         assertThat(problem.getProperties()).containsKeys("type", "title", "status", "detail", "instance", "code",
-                "timestamp", "requestId", "errors");
+                "timestamp", GlobalErrorHandler.REQUEST_ID_PROPERTY, "errors");
         Schema<?> code = problem.getProperties().get("code");
         assertThat(code.getEnum().stream().map(Object::toString).toList())
                 .contains("NTF-BUS-001", "NTF-TEC-001")

@@ -19,6 +19,7 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.time.Duration;
 import java.time.ZoneId;
 import java.util.List;
 
@@ -61,7 +62,7 @@ class EventDatesConsumerTest {
                 .thenReturn(Mono.just(new EventMembership("e1", "Bowling", List.of("olivia", "bob", "carl"), 2)));
         when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
 
-        StepVerifier.create(consumer.eventDates().apply(Flux.just(fixed("e1", "null")))).verifyComplete();
+        StepVerifier.create(consumer.eventDates().apply(Flux.just(fixed("e1", "null")))).expectComplete().verify(Duration.ofSeconds(10));
 
         ArgumentCaptor<Notification> notified = ArgumentCaptor.forClass(Notification.class);
         verify(notificationService, timeout(2000).times(2)).notify(notified.capture());
@@ -77,7 +78,7 @@ class EventDatesConsumerTest {
                 .thenReturn(Mono.just(new EventMembership("e1", "Bowling", List.of("olivia", "bob"), 2)));
         when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
 
-        StepVerifier.create(consumer.eventDates().apply(Flux.just(fixed("e1", "\"2026-10-14T17:00:00Z\"")))).verifyComplete();
+        StepVerifier.create(consumer.eventDates().apply(Flux.just(fixed("e1", "\"2026-10-14T17:00:00Z\"")))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(notificationService, timeout(2000))
                 .notify(argThat(notification -> notification.type() == NotificationType.EVENT_MOVED));
@@ -88,7 +89,7 @@ class EventDatesConsumerTest {
     void eventDates_shouldSkipAnUnknownEvent() {
         when(membershipService.find(any())).thenReturn(Mono.empty());
 
-        StepVerifier.create(consumer.eventDates().apply(Flux.just(fixed("e9", "null")))).verifyComplete();
+        StepVerifier.create(consumer.eventDates().apply(Flux.just(fixed("e9", "null")))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(membershipService, timeout(2000)).find("e9");
         verify(notificationService, never()).notify(any());
@@ -105,7 +106,7 @@ class EventDatesConsumerTest {
                 .thenAnswer(call -> Mono.just(call.getArgument(0)));
 
         StepVerifier.create(consumer.eventDates().apply(Flux.just(CallEventsConsumerTest.record("{"),
-                CallEventsConsumerTest.record("{\"eventId\":\"e1\"}"), fixed("e1", "null")))).verifyComplete();
+                CallEventsConsumerTest.record("{\"eventId\":\"e1\"}"), fixed("e1", "null")))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(notificationService, timeout(2000))
                 .notify(argThat(n -> n != null && "carl".equals(n.recipientId())));
@@ -119,7 +120,7 @@ class EventDatesConsumerTest {
                 .thenReturn(Mono.just(new EventMembership("e2", "Bowling", List.of("bob"), 1)));
         when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
 
-        StepVerifier.create(consumer.eventDates().apply(Flux.just(fixed("e1", "null"), fixed("e2", "null")))).verifyComplete();
+        StepVerifier.create(consumer.eventDates().apply(Flux.just(fixed("e1", "null"), fixed("e2", "null")))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(notificationService, timeout(2000)).notify(argThat(n -> "bob".equals(n.recipientId())));
     }

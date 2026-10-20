@@ -24,6 +24,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -73,7 +74,7 @@ class MongoNotificationRepositoryAdapterTest {
 
         StepVerifier.create(adapter.insert(message()))
                 .assertNext(saved -> assertThat(saved.id()).hasSize(36))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         ArgumentCaptor<NotificationEntity> stored = ArgumentCaptor.forClass(NotificationEntity.class);
         verify(repository).insert(stored.capture());
@@ -88,7 +89,7 @@ class MongoNotificationRepositoryAdapterTest {
 
         StepVerifier.create(adapter.group(message()))
                 .assertNext(merged -> assertThat(merged.count()).isEqualTo(2))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         verify(repository, never()).insert(any(NotificationEntity.class));
     }
@@ -101,7 +102,7 @@ class MongoNotificationRepositoryAdapterTest {
 
         StepVerifier.create(adapter.group(message()))
                 .assertNext(created -> assertThat(created.count()).isEqualTo(1))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -114,7 +115,7 @@ class MongoNotificationRepositoryAdapterTest {
 
         StepVerifier.create(adapter.group(message()))
                 .assertNext(merged -> assertThat(merged.count()).isEqualTo(2))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
 
         verify(repository, times(2)).mergeIntoOpenGroup(any(), any(), any(), any(), any(), any(), any());
     }
@@ -125,8 +126,8 @@ class MongoNotificationRepositoryAdapterTest {
         when(repository.findLatest("bob", Limit.of(30))).thenReturn(Flux.just(open(1)));
         when(repository.findLatestBefore("bob", NOW, Limit.of(30))).thenReturn(Flux.empty());
 
-        StepVerifier.create(adapter.findPage("bob", null, 30)).expectNextCount(1).verifyComplete();
-        StepVerifier.create(adapter.findPage("bob", NOW, 30)).verifyComplete();
+        StepVerifier.create(adapter.findPage("bob", null, 30)).expectNextCount(1).expectComplete().verify(Duration.ofSeconds(10));
+        StepVerifier.create(adapter.findPage("bob", NOW, 30)).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -137,10 +138,10 @@ class MongoNotificationRepositoryAdapterTest {
         when(repository.markGroupRead("bob", "c1", NOW)).thenReturn(Mono.just(2L));
         when(repository.markAllRead("bob", NOW)).thenReturn(Mono.just(4L));
 
-        StepVerifier.create(adapter.countUnread("bob")).expectNext(3L).verifyComplete();
-        StepVerifier.create(adapter.markRead("bob", List.of("n1"), NOW)).expectNext(1L).verifyComplete();
-        StepVerifier.create(adapter.markGroupRead("bob", "c1", NOW)).expectNext(2L).verifyComplete();
-        StepVerifier.create(adapter.markAllRead("bob", NOW)).expectNext(4L).verifyComplete();
+        StepVerifier.create(adapter.countUnread("bob")).expectNext(3L).expectComplete().verify(Duration.ofSeconds(10));
+        StepVerifier.create(adapter.markRead("bob", List.of("n1"), NOW)).expectNext(1L).expectComplete().verify(Duration.ofSeconds(10));
+        StepVerifier.create(adapter.markGroupRead("bob", "c1", NOW)).expectNext(2L).expectComplete().verify(Duration.ofSeconds(10));
+        StepVerifier.create(adapter.markAllRead("bob", NOW)).expectNext(4L).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -148,7 +149,7 @@ class MongoNotificationRepositoryAdapterTest {
     void deleteByRecipient_shouldUseTheRecipientQuery() {
         when(repository.deleteByRecipient("bob")).thenReturn(Mono.just(4L));
 
-        StepVerifier.create(adapter.deleteByRecipient("bob")).expectNext(4L).verifyComplete();
+        StepVerifier.create(adapter.deleteByRecipient("bob")).expectNext(4L).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -158,7 +159,7 @@ class MongoNotificationRepositoryAdapterTest {
                 new NotificationRecipient("bob"), new NotificationRecipient("carl")));
         when(repository.deleteByActor("lea")).thenReturn(Mono.just(3L));
 
-        StepVerifier.create(adapter.deleteByActor("lea")).expectNext(Set.of("bob", "carl")).verifyComplete();
+        StepVerifier.create(adapter.deleteByActor("lea")).expectNext(Set.of("bob", "carl")).expectComplete().verify(Duration.ofSeconds(10));
 
         var order = inOrder(repository);
         order.verify(repository).findRecipientsOfActor("lea");
@@ -171,7 +172,7 @@ class MongoNotificationRepositoryAdapterTest {
         when(repository.findRecipientsOfActor("lea")).thenReturn(Flux.empty());
         when(repository.deleteByActor("lea")).thenReturn(Mono.just(0L));
 
-        StepVerifier.create(adapter.deleteByActor("lea")).expectNext(Set.of()).verifyComplete();
+        StepVerifier.create(adapter.deleteByActor("lea")).expectNext(Set.of()).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -179,7 +180,7 @@ class MongoNotificationRepositoryAdapterTest {
     void deleteOwned_shouldUseTheRecipientScopedQuery() {
         when(repository.deleteOwned("n1", "bob")).thenReturn(Mono.just(1L));
 
-        StepVerifier.create(adapter.deleteOwned("bob", "n1")).verifyComplete();
+        StepVerifier.create(adapter.deleteOwned("bob", "n1")).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(repository).deleteOwned("n1", "bob");
     }
@@ -227,6 +228,6 @@ class MongoNotificationRepositoryAdapterTest {
                             // The driver's failure stays attached, so the ERROR log shows what actually broke.
                             assertThat(failure.getCause()).isInstanceOf(DataAccessException.class);
                         }))
-                .verify();
+                .verify(Duration.ofSeconds(10));
     }
 }

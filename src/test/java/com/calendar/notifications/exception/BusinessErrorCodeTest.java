@@ -39,8 +39,7 @@ class BusinessErrorCodeTest {
     @Test
     @DisplayName("no code is also written as a literal by GlobalErrorHandler")
     void values_shouldNotReuseAHandlerCode() {
-        assertThat(codes()).doesNotContain(GlobalErrorHandler.VALIDATION_FAILED_CODE,
-                GlobalErrorHandler.REQUEST_REFUSED_CODE, GlobalErrorHandler.UNEXPECTED_ERROR_CODE);
+        assertThat(codes()).doesNotContainAnyElementsOf(GlobalErrorHandler.HANDLER_CODES);
     }
 
     @Test

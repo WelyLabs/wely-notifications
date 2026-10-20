@@ -18,6 +18,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.time.Duration;
 import java.time.Instant;
 
 import static com.calendar.notifications.infrastructure.persistence.adapters.MongoNotificationRepositoryAdapterTest.assertStoreUnavailable;
@@ -49,7 +50,7 @@ class MongoApnsDeviceRepositoryAdapterTest {
     void save_shouldWriteUnderTheToken() {
         when(repository.save(ENTITY)).thenReturn(Mono.just(ENTITY));
 
-        StepVerifier.create(adapter.save(DEVICE)).verifyComplete();
+        StepVerifier.create(adapter.save(DEVICE)).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(repository).save(ENTITY);
     }
@@ -59,7 +60,7 @@ class MongoApnsDeviceRepositoryAdapterTest {
     void findByUser_shouldReadTheUsersDevices() {
         when(repository.findByUser("bob")).thenReturn(Flux.just(ENTITY));
 
-        StepVerifier.create(adapter.findByUser("bob")).expectNext(DEVICE).verifyComplete();
+        StepVerifier.create(adapter.findByUser("bob")).expectNext(DEVICE).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -67,7 +68,7 @@ class MongoApnsDeviceRepositoryAdapterTest {
     void deleteOwned_shouldUseTheOwnerScopedQuery() {
         when(repository.deleteOwned(TOKEN, "bob")).thenReturn(Mono.just(1L));
 
-        StepVerifier.create(adapter.deleteOwned("bob", TOKEN)).verifyComplete();
+        StepVerifier.create(adapter.deleteOwned("bob", TOKEN)).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(repository).deleteOwned(TOKEN, "bob");
     }
@@ -77,7 +78,7 @@ class MongoApnsDeviceRepositoryAdapterTest {
     void delete_shouldDeleteTheToken() {
         when(repository.deleteById(TOKEN)).thenReturn(Mono.empty());
 
-        StepVerifier.create(adapter.delete(TOKEN)).verifyComplete();
+        StepVerifier.create(adapter.delete(TOKEN)).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(repository).deleteById(TOKEN);
     }
@@ -87,7 +88,7 @@ class MongoApnsDeviceRepositoryAdapterTest {
     void deleteByUser_shouldUseTheUserQuery() {
         when(repository.deleteByUser("bob")).thenReturn(Mono.just(2L));
 
-        StepVerifier.create(adapter.deleteByUser("bob")).verifyComplete();
+        StepVerifier.create(adapter.deleteByUser("bob")).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(repository).deleteByUser("bob");
     }

@@ -39,8 +39,7 @@ class TechnicalErrorCodeTest {
     @Test
     @DisplayName("no code is also written as a literal by GlobalErrorHandler, the catch-all NTF-TEC-000 included")
     void values_shouldNotReuseAHandlerCode() {
-        assertThat(codes()).doesNotContain(GlobalErrorHandler.VALIDATION_FAILED_CODE,
-                GlobalErrorHandler.REQUEST_REFUSED_CODE, GlobalErrorHandler.UNEXPECTED_ERROR_CODE);
+        assertThat(codes()).doesNotContainAnyElementsOf(GlobalErrorHandler.HANDLER_CODES);
     }
 
     @Test

@@ -16,6 +16,7 @@ import org.springframework.dao.DuplicateKeyException;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.time.Duration;
 import java.util.List;
 
 import static com.calendar.notifications.infrastructure.persistence.adapters.MongoNotificationRepositoryAdapterTest.assertStoreUnavailable;
@@ -46,7 +47,7 @@ class MongoEventMembersAdapterTest {
     void apply_shouldUpdateAKnownEvent() {
         when(repository.applyIfNewer("e1", "Bowling", List.of("a", "b"), 3)).thenReturn(Mono.just(1L));
 
-        StepVerifier.create(adapter.apply(MEMBERSHIP)).expectNext(true).verifyComplete();
+        StepVerifier.create(adapter.apply(MEMBERSHIP)).expectNext(true).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(repository, never()).insert(any(EventMembersEntity.class));
     }
@@ -57,7 +58,7 @@ class MongoEventMembersAdapterTest {
         when(repository.applyIfNewer(any(), any(), any(), anyLong())).thenReturn(Mono.just(0L));
         when(repository.insert(ENTITY)).thenReturn(Mono.just(ENTITY));
 
-        StepVerifier.create(adapter.apply(MEMBERSHIP)).expectNext(true).verifyComplete();
+        StepVerifier.create(adapter.apply(MEMBERSHIP)).expectNext(true).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -66,7 +67,7 @@ class MongoEventMembersAdapterTest {
         when(repository.applyIfNewer(any(), any(), any(), anyLong())).thenReturn(Mono.just(0L));
         when(repository.insert(ENTITY)).thenReturn(Mono.error(new DuplicateKeyException("exists")));
 
-        StepVerifier.create(adapter.apply(MEMBERSHIP)).expectNext(false).verifyComplete();
+        StepVerifier.create(adapter.apply(MEMBERSHIP)).expectNext(false).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -74,7 +75,7 @@ class MongoEventMembersAdapterTest {
     void find_shouldReadTheProjection() {
         when(repository.findById("e1")).thenReturn(Mono.just(ENTITY));
 
-        StepVerifier.create(adapter.find("e1")).expectNext(MEMBERSHIP).verifyComplete();
+        StepVerifier.create(adapter.find("e1")).expectNext(MEMBERSHIP).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test

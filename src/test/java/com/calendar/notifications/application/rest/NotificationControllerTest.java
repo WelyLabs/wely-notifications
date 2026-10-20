@@ -65,7 +65,7 @@ class NotificationControllerTest {
 
         StepVerifier.create(controller.list(jwt, AT, 10))
                 .assertNext(dto -> assertThat(dto.id()).isEqualTo("n1"))
-                .verifyComplete();
+                .expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -73,7 +73,7 @@ class NotificationControllerTest {
     void unreadCount_shouldCountTheCallers() {
         when(notificationService.unreadCount("bob")).thenReturn(Mono.just(2L));
 
-        StepVerifier.create(controller.unreadCount(jwt)).expectNext(new UnreadCountDTO(2)).verifyComplete();
+        StepVerifier.create(controller.unreadCount(jwt)).expectNext(new UnreadCountDTO(2)).expectComplete().verify(Duration.ofSeconds(10));
     }
 
     @Test
@@ -83,9 +83,9 @@ class NotificationControllerTest {
         when(notificationService.markGroupRead("bob", "c1")).thenReturn(Mono.empty());
         when(notificationService.markRead("bob", List.of("n1"))).thenReturn(Mono.empty());
 
-        StepVerifier.create(controller.markRead(jwt, new ReadRequest(null, null, true))).verifyComplete();
-        StepVerifier.create(controller.markRead(jwt, new ReadRequest(null, "c1", null))).verifyComplete();
-        StepVerifier.create(controller.markRead(jwt, new ReadRequest(List.of("n1"), null, null))).verifyComplete();
+        StepVerifier.create(controller.markRead(jwt, new ReadRequest(null, null, true))).expectComplete().verify(Duration.ofSeconds(10));
+        StepVerifier.create(controller.markRead(jwt, new ReadRequest(null, "c1", null))).expectComplete().verify(Duration.ofSeconds(10));
+        StepVerifier.create(controller.markRead(jwt, new ReadRequest(List.of("n1"), null, null))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(notificationService).markAllRead("bob");
         verify(notificationService).markGroupRead("bob", "c1");
@@ -150,6 +150,6 @@ class NotificationControllerTest {
         StepVerifier.create(controller.stream(jwt))
                 .expectErrorSatisfies(error -> assertThat(((BusinessException) error).getErrorCode())
                         .isEqualTo(BusinessErrorCode.ACCOUNT_DELETED))
-                .verify();
+                .verify(Duration.ofSeconds(10));
     }
 }

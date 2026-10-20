@@ -77,8 +77,7 @@ public class OpenApiConfig {
         return Stream.of(
                         Arrays.stream(BusinessErrorCode.values()).map(BusinessErrorCode::getCode),
                         Arrays.stream(TechnicalErrorCode.values()).map(TechnicalErrorCode::getCode),
-                        Stream.of(GlobalErrorHandler.VALIDATION_FAILED_CODE, GlobalErrorHandler.REQUEST_REFUSED_CODE,
-                                GlobalErrorHandler.UNEXPECTED_ERROR_CODE))
+                        GlobalErrorHandler.HANDLER_CODES.stream())
                 .flatMap(codes -> codes)
                 .sorted()
                 .toList();
@@ -98,7 +97,7 @@ public class OpenApiConfig {
                 .addProperty("instance", new StringSchema().format("uri"))
                 .addProperty("code", code)
                 .addProperty("timestamp", new DateTimeSchema())
-                .addProperty("requestId", new StringSchema()
+                .addProperty(GlobalErrorHandler.REQUEST_ID_PROPERTY, new StringSchema()
                         .description("Request id, also printed on this request's log lines."))
                 .addProperty("errors", new MapSchema()
                         .additionalProperties(new StringSchema())

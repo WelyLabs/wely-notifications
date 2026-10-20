@@ -3,6 +3,8 @@ package com.calendar.notifications.exception;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
@@ -16,6 +18,7 @@ import org.springframework.web.server.ServerWebExchange;
 import java.net.URI;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -25,8 +28,13 @@ import java.util.Map;
  * client branches on, and {@code timestamp}, to correlate with logs. A third, {@code requestId},
  * is the WebFlux request id: the same one that prefixes the framework's log lines, and the one
  * every log line here carries, so a response leads straight to its logs.
+ *
+ * <p>First in line among the advices, so no other one answers a failure in its own shape. Failures
+ * that never reach a controller go through {@link #handle} too, from {@link ProblemWebExceptionHandler}
+ * and the security handlers, so every error this service answers comes from this one mapping.
  */
 @RestControllerAdvice
+@Order(Ordered.HIGHEST_PRECEDENCE)
 public class GlobalErrorHandler {
 
     /** Bean Validation rejections; not in {@link BusinessErrorCode} because the fields vary per request. */
@@ -36,13 +44,20 @@ public class GlobalErrorHandler {
     public static final String REQUEST_REFUSED_CODE = "NTF-REQ-000";
 
     /** The catch-all: a failure nothing above recognised. */
-    public static final String UNEXPECTED_ERROR_CODE = "NTF-TEC-000";
+    public static final String UNEXPECTED_FAILURE_CODE = "NTF-TEC-000";
+
+    /** The codes written here rather than taken from an enum. */
+    public static final List<String> HANDLER_CODES =
+            List.of(VALIDATION_FAILED_CODE, REQUEST_REFUSED_CODE, UNEXPECTED_FAILURE_CODE);
 
     /** Exposed to Prometheus as {@code wely_errors_technical_total}. */
     public static final String TECHNICAL_ERRORS_METRIC = "wely.errors.technical";
 
     /** Tag carrying the error code on {@link #TECHNICAL_ERRORS_METRIC}. */
     public static final String CODE_TAG = "code";
+
+    /** Problem property holding the WebFlux request id. */
+    public static final String REQUEST_ID_PROPERTY = "requestId";
 
     private static final Logger log = LoggerFactory.getLogger(GlobalErrorHandler.class);
 
@@ -65,9 +80,8 @@ public class GlobalErrorHandler {
         log.warn("Business failure {} on {} (request {})", error.getCode(), exchange.getRequest().getPath(),
                 requestId(exchange));
 
-        return ResponseEntity.status(error.getHttpStatus())
-                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
-                .body(problem(error.getHttpStatus(), error.getCode(), error.getTitle(), error.getDetail(), exchange));
+        return problemResponse(problem(error.getHttpStatus(), error.getCode(), error.getTitle(), error.getDetail(),
+                exchange));
     }
 
     /** Sets problem+json itself too: the store can fail while the SSE route opens its stream. */
@@ -82,9 +96,8 @@ public class GlobalErrorHandler {
                 requestId(exchange), ex);
         countTechnicalFailure(error.getCode());
 
-        return ResponseEntity.status(error.getHttpStatus())
-                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
-                .body(problem(error.getHttpStatus(), error.getCode(), error.getTitle(), error.getDetail(), exchange));
+        return problemResponse(problem(error.getHttpStatus(), error.getCode(), error.getTitle(), error.getDetail(),
+                exchange));
     }
 
     /** Bean Validation rejections, with the offending fields listed. */
@@ -119,7 +132,8 @@ public class GlobalErrorHandler {
     public ProblemDetail handleResponseStatusException(ResponseStatusException ex,
                                                        ServerWebExchange exchange) {
         HttpStatus status = HttpStatus.valueOf(ex.getStatusCode().value());
-        log.debug("{} on {} (request {})", status, exchange.getRequest().getPath(), requestId(exchange));
+        log.debug("{} {} on {} (request {})", status, REQUEST_REFUSED_CODE, exchange.getRequest().getPath(),
+                requestId(exchange));
 
         return problem(status, REQUEST_REFUSED_CODE, status.getReasonPhrase(),
                 "The request could not be served as sent.", exchange);
@@ -132,12 +146,45 @@ public class GlobalErrorHandler {
      */
     @ExceptionHandler(Exception.class)
     public ProblemDetail handleUnexpectedException(Exception ex, ServerWebExchange exchange) {
-        log.error("Unhandled failure {} on {} (request {})", UNEXPECTED_ERROR_CODE, exchange.getRequest().getPath(),
+        log.error("Unhandled failure {} on {} (request {})", UNEXPECTED_FAILURE_CODE, exchange.getRequest().getPath(),
                 requestId(exchange), ex);
-        countTechnicalFailure(UNEXPECTED_ERROR_CODE);
+        countTechnicalFailure(UNEXPECTED_FAILURE_CODE);
 
-        return problem(HttpStatus.INTERNAL_SERVER_ERROR, UNEXPECTED_ERROR_CODE,
+        return problem(HttpStatus.INTERNAL_SERVER_ERROR, UNEXPECTED_FAILURE_CODE,
                 "Unexpected error", "The request could not be completed.", exchange);
+    }
+
+    /**
+     * The same mapping as the handlers above, for failures no controller saw: same code, status,
+     * log level and counter, whichever way the failure arrived.
+     */
+    public ResponseEntity<ProblemDetail> handle(Throwable failure, ServerWebExchange exchange) {
+        return switch (failure) {
+            case BusinessException business -> handleBusinessException(business, exchange);
+            case TechnicalException technical -> handleTechnicalException(technical, exchange);
+            case WebExchangeBindException invalid -> problemResponse(handleValidationException(invalid, exchange));
+            case ResponseStatusException refused -> problemResponse(handleResponseStatusException(refused, exchange));
+            case Exception unexpected -> problemResponse(handleUnexpectedException(unexpected, exchange));
+            // An Error (OutOfMemoryError...) is not ours to turn into a response.
+            default -> throw new IllegalStateException("Not an exception: " + failure.getClass().getName(), failure);
+        };
+    }
+
+    /**
+     * The one problem builder of this service: every error response, whatever writes it, has
+     * the same fields.
+     */
+    public static ProblemDetail problem(HttpStatus status, String code, String title, String detail,
+                                        ServerWebExchange exchange) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(status, detail);
+        problem.setType(URI.create(PROBLEM_TYPE_BASE + code.toLowerCase()));
+        problem.setTitle(title);
+        problem.setInstance(URI.create(exchange.getRequest().getPath().value()));
+        problem.setProperty("code", code);
+        problem.setProperty("timestamp", Instant.now().toString());
+        problem.setProperty(REQUEST_ID_PROPERTY, requestId(exchange));
+
+        return problem;
     }
 
     // Counted per code, so an alert can tell a store outage from an unreachable wely-users.
@@ -145,20 +192,13 @@ public class GlobalErrorHandler {
         meterRegistry.counter(TECHNICAL_ERRORS_METRIC, CODE_TAG, code).increment();
     }
 
-    private static String requestId(ServerWebExchange exchange) {
-        return exchange.getRequest().getId();
+    private static ResponseEntity<ProblemDetail> problemResponse(ProblemDetail problem) {
+        return ResponseEntity.status(problem.getStatus())
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(problem);
     }
 
-    private ProblemDetail problem(HttpStatus status, String code, String title, String detail,
-                                  ServerWebExchange exchange) {
-        ProblemDetail problem = ProblemDetail.forStatusAndDetail(status, detail);
-        problem.setType(URI.create(PROBLEM_TYPE_BASE + code.toLowerCase()));
-        problem.setTitle(title);
-        problem.setInstance(URI.create(exchange.getRequest().getPath().value()));
-        problem.setProperty("code", code);
-        problem.setProperty("timestamp", Instant.now().toString());
-        problem.setProperty("requestId", requestId(exchange));
-
-        return problem;
+    private static String requestId(ServerWebExchange exchange) {
+        return exchange.getRequest().getId();
     }
 }

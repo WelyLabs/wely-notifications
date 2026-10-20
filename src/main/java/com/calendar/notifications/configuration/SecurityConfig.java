@@ -1,5 +1,7 @@
 package com.calendar.notifications.configuration;
 
+import com.calendar.notifications.exception.ProblemAccessDeniedHandler;
+import com.calendar.notifications.exception.ProblemAuthenticationEntryPoint;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -23,7 +25,9 @@ public class SecurityConfig {
     private String internalJwkSetUri;
 
     @Bean
-    public SecurityWebFilterChain apiHttpSecurity(ServerHttpSecurity http) {
+    public SecurityWebFilterChain apiHttpSecurity(ServerHttpSecurity http,
+                                                  ProblemAuthenticationEntryPoint authenticationEntryPoint,
+                                                  ProblemAccessDeniedHandler accessDeniedHandler) {
         return http
                 .cors(Customizer.withDefaults())
                 .csrf(ServerHttpSecurity.CsrfSpec::disable)
@@ -32,13 +36,26 @@ public class SecurityConfig {
                         // Kubernetes probes: the kubelet carries no token. Only the two
                         // health groups are opened, not /actuator as a whole.
                         .pathMatchers("/actuator/health/liveness", "/actuator/health/readiness").permitAll()
+                        // Prometheus scrapes without a token. The Service is ClusterIP only and the
+                        // gateway routes /api/v1/<service>/** and nothing under /actuator, so this
+                        // path is reachable in-cluster only; and the metrics hold no user data.
+                        // The rest of /actuator stays closed.
+                        .pathMatchers(HttpMethod.GET, "/actuator/prometheus").permitAll()
                         // OpenAPI. These paths are not routed by the gateway — it forwards
                         // /api/v1/<service>/** and /rsocket only — so opening them here makes
                         // the documentation reachable in-cluster and in dev, and nowhere else.
                         .pathMatchers("/v3/api-docs", "/v3/api-docs/**", "/swagger-ui/**",
                                       "/swagger-ui.html", "/webjars/swagger-ui/**").permitAll()
                         .anyExchange().authenticated())
-                .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))
+                // Both places: the resource server uses its own handlers for bearer requests, the
+                // exception handling ones cover the rest. Either way the answer is our problem.
+                .exceptionHandling(errors -> errors
+                        .authenticationEntryPoint(authenticationEntryPoint)
+                        .accessDeniedHandler(accessDeniedHandler))
+                .oauth2ResourceServer(oauth2 -> oauth2
+                        .authenticationEntryPoint(authenticationEntryPoint)
+                        .accessDeniedHandler(accessDeniedHandler)
+                        .jwt(Customizer.withDefaults()))
                 .build();
     }
 

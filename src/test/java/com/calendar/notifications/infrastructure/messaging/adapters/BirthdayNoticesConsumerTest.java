@@ -16,6 +16,7 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.time.Duration;
 import java.time.ZoneId;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -48,7 +49,7 @@ class BirthdayNoticesConsumerTest {
         StepVerifier.create(consumer.birthdayNotices().apply(Flux.just(CallEventsConsumerTest.record("""
                 {"type":"SURPRISE_PROPOSAL","recipientId":"bob","honoreeId":"lea","honoreeName":"Léa",
                  "date":"2027-03-12","daysUntil":14,"closeness":"CLOSE","surpriseEventId":null,
-                 "organizerId":null,"organizerName":null}""")))).verifyComplete();
+                 "organizerId":null,"organizerName":null}""")))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(notificationService, timeout(2000)).notify(Notification.draft("bob",
                 NotificationType.BIRTHDAY_SURPRISE_PROPOSAL, "🎁 Léa fête son anniversaire dans 14 jours",
@@ -61,7 +62,7 @@ class BirthdayNoticesConsumerTest {
     void birthdayNotices_shouldIgnoreAnUnknownNotice() {
         StepVerifier.create(consumer.birthdayNotices().apply(Flux.just(CallEventsConsumerTest.record("""
                 {"type":"BIRTHDAY_FORGOTTEN","recipientId":"bob","honoreeId":"lea","honoreeName":"Léa",
-                 "date":"2027-03-12"}""")))).verifyComplete();
+                 "date":"2027-03-12"}""")))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(notificationService, never()).notify(any());
     }
@@ -77,7 +78,7 @@ class BirthdayNoticesConsumerTest {
                  "date":"2027-03-12","daysUntil":0,"closeness":"INTIMATE"}""";
 
         StepVerifier.create(consumer.birthdayNotices().apply(Flux.just(CallEventsConsumerTest.record("{"),
-                CallEventsConsumerTest.record(today), CallEventsConsumerTest.record(today)))).verifyComplete();
+                CallEventsConsumerTest.record(today), CallEventsConsumerTest.record(today)))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(notificationService, timeout(2000).times(2)).notify(any());
     }

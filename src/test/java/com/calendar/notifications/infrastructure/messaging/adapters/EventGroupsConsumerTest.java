@@ -15,6 +15,7 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -52,7 +53,7 @@ class EventGroupsConsumerTest {
     void eventGroups_shouldApplyTheMembership() {
         when(membershipService.apply(any())).thenReturn(Mono.just(true));
 
-        StepVerifier.create(consumer.eventGroups().apply(Flux.just(group("e1", 3, false)))).verifyComplete();
+        StepVerifier.create(consumer.eventGroups().apply(Flux.just(group("e1", 3, false)))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(membershipService, timeout(2000))
                 .apply(new EventMembership("e1", "Bowling", List.of("olivia", "bob"), 3));
@@ -63,7 +64,7 @@ class EventGroupsConsumerTest {
     void eventGroups_shouldEmptyADeletedEvent() {
         when(membershipService.apply(any())).thenReturn(Mono.just(true));
 
-        StepVerifier.create(consumer.eventGroups().apply(Flux.just(group("e1", 4, true)))).verifyComplete();
+        StepVerifier.create(consumer.eventGroups().apply(Flux.just(group("e1", 4, true)))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(membershipService, timeout(2000)).apply(new EventMembership("e1", null, List.of(), 4));
     }
@@ -74,7 +75,7 @@ class EventGroupsConsumerTest {
         when(membershipService.apply(any())).thenReturn(Mono.just(true));
 
         StepVerifier.create(consumer.eventGroups().apply(Flux.just(CallEventsConsumerTest.record("nope"),
-                CallEventsConsumerTest.record("{\"title\":\"x\",\"version\":1,\"deleted\":false}"), group("e2", 1, false)))).verifyComplete();
+                CallEventsConsumerTest.record("{\"title\":\"x\",\"version\":1,\"deleted\":false}"), group("e2", 1, false)))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(membershipService, timeout(2000)).apply(argThat(membership -> "e2".equals(membership.eventId())));
         verify(membershipService, never()).apply(argThat(membership -> membership.eventId() == null));
@@ -92,7 +93,7 @@ class EventGroupsConsumerTest {
         when(membershipService.apply(argThat(membership -> membership != null && "e2".equals(membership.eventId()))))
                 .thenReturn(Mono.just(true));
 
-        StepVerifier.create(consumer.eventGroups().apply(Flux.just(group("e1", 1, false), group("e2", 1, false)))).verifyComplete();
+        StepVerifier.create(consumer.eventGroups().apply(Flux.just(group("e1", 1, false), group("e2", 1, false)))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(membershipService, timeout(20_000)).apply(argThat(membership -> membership != null
                 && "e2".equals(membership.eventId())));
