@@ -6,17 +6,23 @@ import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.models.NotificationType;
 import com.calendar.notifications.domain.services.NotificationService;
 import com.calendar.notifications.domain.services.PushService;
+import com.calendar.notifications.exception.GlobalErrorHandler;
+import com.calendar.notifications.exception.TechnicalErrorCode;
+import com.calendar.notifications.exception.TechnicalErrorCounter;
+import com.calendar.notifications.exception.TechnicalException;
 import com.calendar.notifications.infrastructure.messaging.mappers.IncomingCallMapper;
 import com.calendar.notifications.infrastructure.messaging.models.CallEventBroadcastDTO;
 import com.calendar.notifications.infrastructure.messaging.notices.DateNoticeFormatter;
 import com.calendar.notifications.infrastructure.messaging.notices.NotificationDrafts;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mapstruct.factory.Mappers;
-import org.mockito.InOrder;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.Message;
@@ -46,6 +52,9 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class CallEventsConsumerTest {
 
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    private final TechnicalErrorCounter technicalErrors = new TechnicalErrorCounter(registry);
+
     @Mock
     private NotificationService notificationService;
     @Mock
@@ -57,7 +66,7 @@ class CallEventsConsumerTest {
     void setUp() {
         consumer = new CallEventsConsumer(notificationService, pushService,
                 new NotificationDrafts(new DateNoticeFormatter(ZoneId.of("Europe/Paris"))),
-                Mappers.getMapper(IncomingCallMapper.class), new RecordReader(JsonMapper.builder().build()));
+                Mappers.getMapper(IncomingCallMapper.class), new RecordReader(JsonMapper.builder().build(), technicalErrors), technicalErrors);
     }
 
     static Message<byte[]> record(String json) {
@@ -154,13 +163,16 @@ class CallEventsConsumerTest {
     @DisplayName("an unreadable record and a failing notification are dropped, and the next record still read")
     void callEvents_shouldKeepConsuming_afterAFailure() {
         when(notificationService.notifyCall(any(), any()))
-                .thenReturn(Mono.error(new IllegalStateException("store down")))
+                .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)))
                 .thenAnswer(call -> Mono.just(call.getArgument(0)));
 
         StepVerifier.create(consumer.callEvents().apply(Flux.just(record("{not json"), call("RINGING", "bob", "RINGING"),
                 call("RINGING", "carl", "RINGING")))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(notificationService, timeout(2000).times(2)).notifyCall(any(), any());
+
+        assertThat(technicalFailures(GlobalErrorHandler.UNEXPECTED_FAILURE_CODE)).isEqualTo(1.0);
+        assertThat(technicalFailures("NTF-TEC-001")).isEqualTo(1.0);
     }
 
     @Test
@@ -169,5 +181,13 @@ class CallEventsConsumerTest {
         consumer.callEvents().apply(Flux.just(call("RINGING", "bob", "RINGING")));
 
         verifyNoInteractions(notificationService, pushService);
+    }
+
+    private double technicalFailures(String code) {
+        Counter counter = registry.find(GlobalErrorHandler.TECHNICAL_ERRORS_METRIC)
+                .tag(GlobalErrorHandler.CODE_TAG, code)
+                .tag(GlobalErrorHandler.SOURCE_TAG, TechnicalErrorCounter.SOURCE_KAFKA)
+                .counter();
+        return counter == null ? 0 : counter.count();
     }
 }

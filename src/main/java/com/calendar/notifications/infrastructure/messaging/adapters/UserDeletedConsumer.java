@@ -1,6 +1,7 @@
 package com.calendar.notifications.infrastructure.messaging.adapters;
 
 import com.calendar.notifications.domain.services.AccountErasureService;
+import com.calendar.notifications.exception.TechnicalErrorCounter;
 import com.calendar.notifications.infrastructure.messaging.models.UserDeletedEventDTO;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -8,8 +9,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.Message;
-import reactor.core.publisher.Flux;
 import reactor.core.Exceptions;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.retry.Retry;
 
@@ -29,10 +30,13 @@ public class UserDeletedConsumer {
 
     private final AccountErasureService erasure;
     private final RecordReader reader;
+    private final TechnicalErrorCounter technicalErrors;
 
-    public UserDeletedConsumer(AccountErasureService erasure, RecordReader reader) {
+    public UserDeletedConsumer(AccountErasureService erasure, RecordReader reader,
+                               TechnicalErrorCounter technicalErrors) {
         this.erasure = erasure;
         this.reader = reader;
+        this.technicalErrors = technicalErrors;
     }
 
     @Bean
@@ -58,6 +62,7 @@ public class UserDeletedConsumer {
                 .onErrorResume(error -> {
                     Throwable last = Exceptions.isRetryExhausted(error) && error.getCause() != null
                             ? error.getCause() : error;
+                    technicalErrors.count(last, TechnicalErrorCounter.SOURCE_KAFKA);
                     log.warn("{} not applied, userId={}, reconciliation will retry: {}", TOPIC, event.userId(),
                             last.getMessage());
                     return Mono.empty();

@@ -1,8 +1,12 @@
 package com.calendar.notifications.infrastructure.messaging.adapters;
 
 import com.calendar.notifications.domain.services.AccountErasureService;
+import com.calendar.notifications.exception.GlobalErrorHandler;
 import com.calendar.notifications.exception.TechnicalErrorCode;
+import com.calendar.notifications.exception.TechnicalErrorCounter;
 import com.calendar.notifications.exception.TechnicalException;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -20,6 +24,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.function.Function;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static com.calendar.notifications.infrastructure.messaging.adapters.CallEventsConsumerTest.record;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -30,6 +35,9 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class UserDeletedConsumerTest {
+
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    private final TechnicalErrorCounter technicalErrors = new TechnicalErrorCounter(registry);
 
     private static final Instant DELETED_AT = Instant.parse("2026-10-15T14:03:27.123Z");
     private static final String LEA_DELETED = """
@@ -42,7 +50,7 @@ class UserDeletedConsumerTest {
 
     @BeforeEach
     void setUp() {
-        userDeleted = new UserDeletedConsumer(erasure, new RecordReader(JsonMapper.builder().build())).userDeleted();
+        userDeleted = new UserDeletedConsumer(erasure, new RecordReader(JsonMapper.builder().build(), technicalErrors), technicalErrors).userDeleted();
     }
 
     private static TechnicalException storeDown() {
@@ -75,7 +83,7 @@ class UserDeletedConsumerTest {
         // A mapper strict about unknown fields: only the DTO's own annotation lets this record through.
         userDeleted = new UserDeletedConsumer(erasure, new RecordReader(JsonMapper.builder()
                 .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                .build())).userDeleted();
+                .build(), technicalErrors), technicalErrors).userDeleted();
         when(erasure.erase("lea", DELETED_AT)).thenReturn(Mono.empty());
 
         StepVerifier.create(userDeleted.apply(Flux.just(record("""
@@ -130,6 +138,9 @@ class UserDeletedConsumerTest {
 
         verify(erasure, times(UserDeletedConsumer.MAX_RETRIES + 1)).erase("lea", DELETED_AT);
         verify(erasure).erase(eq("bob"), isNull());
+
+        assertThat(technicalFailures(GlobalErrorHandler.UNEXPECTED_FAILURE_CODE)).isEqualTo(0.0);
+        assertThat(technicalFailures("NTF-TEC-001")).isEqualTo(1.0);
     }
 
     @Test
@@ -146,5 +157,13 @@ class UserDeletedConsumerTest {
         StepVerifier.create(userDeleted.apply(Flux.empty())).expectComplete().verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(erasure);
+    }
+
+    private double technicalFailures(String code) {
+        Counter counter = registry.find(GlobalErrorHandler.TECHNICAL_ERRORS_METRIC)
+                .tag(GlobalErrorHandler.CODE_TAG, code)
+                .tag(GlobalErrorHandler.SOURCE_TAG, TechnicalErrorCounter.SOURCE_KAFKA)
+                .counter();
+        return counter == null ? 0 : counter.count();
     }
 }

@@ -3,8 +3,14 @@ package com.calendar.notifications.infrastructure.messaging.adapters;
 import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.models.NotificationType;
 import com.calendar.notifications.domain.services.NotificationService;
+import com.calendar.notifications.exception.GlobalErrorHandler;
+import com.calendar.notifications.exception.TechnicalErrorCode;
+import com.calendar.notifications.exception.TechnicalErrorCounter;
+import com.calendar.notifications.exception.TechnicalException;
 import com.calendar.notifications.infrastructure.messaging.notices.DateNoticeFormatter;
 import com.calendar.notifications.infrastructure.messaging.notices.NotificationDrafts;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -19,6 +25,7 @@ import tools.jackson.databind.json.JsonMapper;
 import java.time.Duration;
 import java.time.ZoneId;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
@@ -29,6 +36,9 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class BirthdayNoticesConsumerTest {
 
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    private final TechnicalErrorCounter technicalErrors = new TechnicalErrorCounter(registry);
+
     @Mock
     private NotificationService notificationService;
 
@@ -38,7 +48,7 @@ class BirthdayNoticesConsumerTest {
     void setUp() {
         consumer = new BirthdayNoticesConsumer(notificationService,
                 new NotificationDrafts(new DateNoticeFormatter(ZoneId.of("Europe/Paris"))),
-                new RecordReader(JsonMapper.builder().build()));
+                new RecordReader(JsonMapper.builder().build(), technicalErrors), technicalErrors);
     }
 
     @Test
@@ -71,7 +81,7 @@ class BirthdayNoticesConsumerTest {
     @DisplayName("an unreadable record and a failing notification are dropped, and the next record still read")
     void birthdayNotices_shouldKeepConsuming_afterAFailure() {
         when(notificationService.notify(any()))
-                .thenReturn(Mono.error(new IllegalStateException("store down")))
+                .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)))
                 .thenAnswer(call -> Mono.just(call.getArgument(0)));
         String today = """
                 {"type":"FRIEND_BIRTHDAY","recipientId":"bob","honoreeId":"lea","honoreeName":"Léa",
@@ -81,6 +91,9 @@ class BirthdayNoticesConsumerTest {
                 CallEventsConsumerTest.record(today), CallEventsConsumerTest.record(today)))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(notificationService, timeout(2000).times(2)).notify(any());
+
+        assertThat(technicalFailures(GlobalErrorHandler.UNEXPECTED_FAILURE_CODE)).isEqualTo(1.0);
+        assertThat(technicalFailures("NTF-TEC-001")).isEqualTo(1.0);
     }
 
     @Test
@@ -91,5 +104,13 @@ class BirthdayNoticesConsumerTest {
                  "date":"2027-03-12","daysUntil":14,"closeness":"CLOSE"}""")));
 
         verifyNoInteractions(notificationService);
+    }
+
+    private double technicalFailures(String code) {
+        Counter counter = registry.find(GlobalErrorHandler.TECHNICAL_ERRORS_METRIC)
+                .tag(GlobalErrorHandler.CODE_TAG, code)
+                .tag(GlobalErrorHandler.SOURCE_TAG, TechnicalErrorCounter.SOURCE_KAFKA)
+                .counter();
+        return counter == null ? 0 : counter.count();
     }
 }

@@ -4,8 +4,12 @@ import com.calendar.notifications.domain.models.ReconciliationReport;
 import com.calendar.notifications.domain.services.AccountReconciliationService;
 import com.calendar.notifications.exception.BusinessErrorCode;
 import com.calendar.notifications.exception.BusinessException;
+import com.calendar.notifications.exception.GlobalErrorHandler;
 import com.calendar.notifications.exception.TechnicalErrorCode;
+import com.calendar.notifications.exception.TechnicalErrorCounter;
 import com.calendar.notifications.exception.TechnicalException;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -22,6 +26,9 @@ import static org.mockito.Mockito.when;
 
 /** Lifecycle cases run on real time with millisecond delays; the delay choice is checked on passOnce directly. */
 class DeletedUsersReconciliationLoopTest {
+
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    private final TechnicalErrorCounter technicalErrors = new TechnicalErrorCounter(registry);
 
     private static final Duration FAST = Duration.ofMillis(10);
     private static final Duration NEVER = Duration.ofHours(1);
@@ -43,7 +50,7 @@ class DeletedUsersReconciliationLoopTest {
     }
 
     private DeletedUsersReconciliationLoop loop(Duration initialDelay, Duration interval, Duration retryInterval) {
-        loop = new DeletedUsersReconciliationLoop(reconciliation, initialDelay, interval, retryInterval);
+        loop = new DeletedUsersReconciliationLoop(reconciliation, technicalErrors, initialDelay, interval, retryInterval);
         return loop;
     }
 
@@ -203,5 +210,58 @@ class DeletedUsersReconciliationLoopTest {
         StepVerifier.create(loop(NEVER, INTERVAL, RETRY_INTERVAL).passOnce())
                 .expectNext(RETRY_INTERVAL)
                 .expectComplete().verify(Duration.ofSeconds(10));
+    }
+
+    private double failedPasses(String code) {
+        Counter counter = registry.find(GlobalErrorHandler.TECHNICAL_ERRORS_METRIC)
+                .tag(GlobalErrorHandler.CODE_TAG, code)
+                .tag(GlobalErrorHandler.SOURCE_TAG, TechnicalErrorCounter.SOURCE_RECONCILIATION)
+                .counter();
+        return counter == null ? 0 : counter.count();
+    }
+
+    @Test
+    @DisplayName("a pass failed by wely-users is counted under its code and source reconciliation")
+    void passOnce_shouldCountATechnicalFailure() {
+        when(reconciliation.reconcile()).thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.USERS_UNAVAILABLE)));
+
+        StepVerifier.create(loop(NEVER, INTERVAL, RETRY_INTERVAL).passOnce())
+                .expectNext(RETRY_INTERVAL)
+                .expectComplete().verify(Duration.ofSeconds(10));
+
+        assertThat(failedPasses("NTF-TEC-002")).isEqualTo(1.0);
+    }
+
+    @Test
+    void passOnce_shouldCountAnUnexpectedFailure_asTec000() {
+        when(reconciliation.reconcile()).thenThrow(new IllegalStateException("boom"));
+
+        StepVerifier.create(loop(NEVER, INTERVAL, RETRY_INTERVAL).passOnce())
+                .expectNext(RETRY_INTERVAL)
+                .expectComplete().verify(Duration.ofSeconds(10));
+
+        assertThat(failedPasses(GlobalErrorHandler.UNEXPECTED_FAILURE_CODE)).isEqualTo(1.0);
+    }
+
+    @Test
+    void passOnce_shouldNotCountABusinessRefusal() {
+        when(reconciliation.reconcile()).thenReturn(Mono.error(new BusinessException(BusinessErrorCode.ACCOUNT_DELETED)));
+
+        StepVerifier.create(loop(NEVER, INTERVAL, RETRY_INTERVAL).passOnce())
+                .expectNext(RETRY_INTERVAL)
+                .expectComplete().verify(Duration.ofSeconds(10));
+
+        assertThat(registry.find(GlobalErrorHandler.TECHNICAL_ERRORS_METRIC).counters()).isEmpty();
+    }
+
+    @Test
+    void passOnce_shouldNotCount_whenThePassIsClean() {
+        when(reconciliation.reconcile()).thenReturn(Mono.just(CLEAN));
+
+        StepVerifier.create(loop(NEVER, INTERVAL, RETRY_INTERVAL).passOnce())
+                .expectNext(INTERVAL)
+                .expectComplete().verify(Duration.ofSeconds(10));
+
+        assertThat(registry.find(GlobalErrorHandler.TECHNICAL_ERRORS_METRIC).counters()).isEmpty();
     }
 }

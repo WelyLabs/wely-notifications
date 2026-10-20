@@ -1,6 +1,5 @@
 package com.calendar.notifications.exception;
 
-import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
@@ -26,8 +25,8 @@ import java.util.Map;
  *
  * <p>Two properties are added beyond the standard fields: {@code code}, the stable identifier a
  * client branches on, and {@code timestamp}, to correlate with logs. A third, {@code requestId},
- * is the WebFlux request id: the same one that prefixes the framework's log lines, and the one
- * every log line here carries, so a response leads straight to its logs.
+ * is the gateway's {@code X-Request-Id} (WebFlux's own request id when there is none, see
+ * {@link RequestIds}), and every log line here carries it, so a response leads straight to its logs.
  *
  * <p>First in line among the advices, so no other one answers a failure in its own shape. Failures
  * that never reach a controller go through {@link #handle} too, from {@link ProblemWebExceptionHandler}
@@ -56,6 +55,9 @@ public class GlobalErrorHandler {
     /** Tag carrying the error code on {@link #TECHNICAL_ERRORS_METRIC}. */
     public static final String CODE_TAG = "code";
 
+    /** Tag telling where the failure happened; values in {@link TechnicalErrorCounter}. */
+    public static final String SOURCE_TAG = "source";
+
     /** Problem property holding the WebFlux request id. */
     public static final String REQUEST_ID_PROPERTY = "requestId";
 
@@ -64,10 +66,10 @@ public class GlobalErrorHandler {
     /** Namespace for the {@code type} URI. Not dereferenced; it identifies, it does not serve. */
     private static final String PROBLEM_TYPE_BASE = "https://welylabs.app/problems/";
 
-    private final MeterRegistry meterRegistry;
+    private final TechnicalErrorCounter technicalErrors;
 
-    public GlobalErrorHandler(MeterRegistry meterRegistry) {
-        this.meterRegistry = meterRegistry;
+    public GlobalErrorHandler(TechnicalErrorCounter technicalErrors) {
+        this.technicalErrors = technicalErrors;
     }
 
     /** Sets problem+json itself, so the SSE route does not write the problem as an event. */
@@ -94,7 +96,7 @@ public class GlobalErrorHandler {
         // The previous version logged these at WARN, which hid them.
         log.error("Technical failure {} on {} (request {})", error.getCode(), exchange.getRequest().getPath(),
                 requestId(exchange), ex);
-        countTechnicalFailure(error.getCode());
+        technicalErrors.count(ex, TechnicalErrorCounter.SOURCE_HTTP);
 
         return problemResponse(problem(error.getHttpStatus(), error.getCode(), error.getTitle(), error.getDetail(),
                 exchange));
@@ -148,7 +150,7 @@ public class GlobalErrorHandler {
     public ProblemDetail handleUnexpectedException(Exception ex, ServerWebExchange exchange) {
         log.error("Unhandled failure {} on {} (request {})", UNEXPECTED_FAILURE_CODE, exchange.getRequest().getPath(),
                 requestId(exchange), ex);
-        countTechnicalFailure(UNEXPECTED_FAILURE_CODE);
+        technicalErrors.count(ex, TechnicalErrorCounter.SOURCE_HTTP);
 
         return problem(HttpStatus.INTERNAL_SERVER_ERROR, UNEXPECTED_FAILURE_CODE,
                 "Unexpected error", "The request could not be completed.", exchange);
@@ -187,11 +189,6 @@ public class GlobalErrorHandler {
         return problem;
     }
 
-    // Counted per code, so an alert can tell a store outage from an unreachable wely-users.
-    private void countTechnicalFailure(String code) {
-        meterRegistry.counter(TECHNICAL_ERRORS_METRIC, CODE_TAG, code).increment();
-    }
-
     private static ResponseEntity<ProblemDetail> problemResponse(ProblemDetail problem) {
         return ResponseEntity.status(problem.getStatus())
                 .contentType(MediaType.APPLICATION_PROBLEM_JSON)
@@ -199,6 +196,6 @@ public class GlobalErrorHandler {
     }
 
     private static String requestId(ServerWebExchange exchange) {
-        return exchange.getRequest().getId();
+        return RequestIds.of(exchange);
     }
 }

@@ -3,8 +3,14 @@ package com.calendar.notifications.infrastructure.messaging.adapters;
 import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.models.NotificationType;
 import com.calendar.notifications.domain.services.NotificationService;
+import com.calendar.notifications.exception.GlobalErrorHandler;
+import com.calendar.notifications.exception.TechnicalErrorCode;
+import com.calendar.notifications.exception.TechnicalErrorCounter;
+import com.calendar.notifications.exception.TechnicalException;
 import com.calendar.notifications.infrastructure.messaging.notices.DateNoticeFormatter;
 import com.calendar.notifications.infrastructure.messaging.notices.NotificationDrafts;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -22,6 +28,7 @@ import java.time.Duration;
 import java.time.ZoneId;
 import java.util.function.Function;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static com.calendar.notifications.infrastructure.messaging.adapters.CallEventsConsumerTest.record;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.times;
@@ -31,6 +38,9 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class FriendshipNoticesConsumerTest {
+
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    private final TechnicalErrorCounter technicalErrors = new TechnicalErrorCounter(registry);
 
     private static final String NUDGE = """
             {"type":"REUNION_NUDGE","recipientId":"bob","friendId":"hugo","friendName":"Hugo","closeness":"CLOSE",\
@@ -51,7 +61,7 @@ class FriendshipNoticesConsumerTest {
 
     private FriendshipNoticesConsumer consumer(JsonMapper mapper) {
         return new FriendshipNoticesConsumer(notificationService,
-                new NotificationDrafts(new DateNoticeFormatter(ZoneId.of("Europe/Paris"))), new RecordReader(mapper));
+                new NotificationDrafts(new DateNoticeFormatter(ZoneId.of("Europe/Paris"))), new RecordReader(mapper, technicalErrors), technicalErrors);
     }
 
     @Test
@@ -94,13 +104,16 @@ class FriendshipNoticesConsumerTest {
     @DisplayName("an unreadable record and a failing notification are dropped, and the next record still read")
     void friendshipNotices_shouldKeepConsuming_afterAFailure() {
         when(notificationService.notify(any()))
-                .thenReturn(Mono.error(new IllegalStateException("store down")))
+                .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)))
                 .thenAnswer(call -> Mono.just(call.getArgument(0)));
 
         StepVerifier.create(friendshipNotices.apply(Flux.just(record("{"), record(NUDGE), record(ANNIVERSARY))))
                 .expectComplete().verify(Duration.ofSeconds(10));
 
         verify(notificationService, times(2)).notify(any());
+
+        assertThat(technicalFailures(GlobalErrorHandler.UNEXPECTED_FAILURE_CODE)).isEqualTo(1.0);
+        assertThat(technicalFailures("NTF-TEC-001")).isEqualTo(1.0);
     }
 
     @Test
@@ -109,5 +122,13 @@ class FriendshipNoticesConsumerTest {
         friendshipNotices.apply(Flux.just(record(NUDGE)));
 
         verifyNoInteractions(notificationService);
+    }
+
+    private double technicalFailures(String code) {
+        Counter counter = registry.find(GlobalErrorHandler.TECHNICAL_ERRORS_METRIC)
+                .tag(GlobalErrorHandler.CODE_TAG, code)
+                .tag(GlobalErrorHandler.SOURCE_TAG, TechnicalErrorCounter.SOURCE_KAFKA)
+                .counter();
+        return counter == null ? 0 : counter.count();
     }
 }

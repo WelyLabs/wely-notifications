@@ -3,6 +3,7 @@ package com.calendar.notifications.infrastructure.messaging.adapters;
 import com.calendar.notifications.domain.models.EventMembership;
 import com.calendar.notifications.domain.services.EventMembershipService;
 import com.calendar.notifications.domain.services.NotificationService;
+import com.calendar.notifications.exception.TechnicalErrorCounter;
 import com.calendar.notifications.infrastructure.messaging.models.EventDateFixedDTO;
 import com.calendar.notifications.infrastructure.messaging.notices.NotificationDrafts;
 import org.slf4j.Logger;
@@ -32,13 +33,16 @@ public class EventDatesConsumer {
     private final EventMembershipService membershipService;
     private final NotificationDrafts drafts;
     private final RecordReader reader;
+    private final TechnicalErrorCounter technicalErrors;
 
     public EventDatesConsumer(NotificationService notificationService, EventMembershipService membershipService,
-                              NotificationDrafts drafts, RecordReader reader) {
+                              NotificationDrafts drafts, RecordReader reader,
+                              TechnicalErrorCounter technicalErrors) {
         this.notificationService = notificationService;
         this.membershipService = membershipService;
         this.drafts = drafts;
         this.reader = reader;
+        this.technicalErrors = technicalErrors;
     }
 
     @Bean
@@ -57,6 +61,7 @@ public class EventDatesConsumer {
                         .concatMap(recipient -> notify(fixed, recipient))
                         .then())
                 .onErrorResume(error -> {
+                    technicalErrors.count(error, TechnicalErrorCounter.SOURCE_KAFKA);
                     log.error("{} record dropped: {}", TOPIC, error.getMessage());
                     return Mono.empty();
                 });
@@ -67,6 +72,7 @@ public class EventDatesConsumer {
         return Mono.defer(() -> notificationService.notify(drafts.fromDateFixed(fixed, recipient)))
                 .then()
                 .onErrorResume(error -> {
+                    technicalErrors.count(error, TechnicalErrorCounter.SOURCE_KAFKA);
                     log.error("{} notification to {} dropped: {}", TOPIC, recipient, error.getMessage());
                     return Mono.empty();
                 });

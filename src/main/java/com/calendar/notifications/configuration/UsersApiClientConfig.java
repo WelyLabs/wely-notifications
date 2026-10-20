@@ -24,7 +24,9 @@ public class UsersApiClientConfig {
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) TIMEOUT.toMillis())
                 .responseTimeout(TIMEOUT);
         WebClient.Builder builder = WebClient.builder()
-                .clientConnector(new ReactorClientHttpConnector(httpClient));
+                .clientConnector(new ReactorClientHttpConnector(httpClient))
+                // wely-users is a Wely service: it gets the request id, when there is one.
+                .filter(new RequestIdExchangeFilterFunction());
         if (!usersApiUrl.isBlank()) {
             builder.baseUrl(usersApiUrl);
         }

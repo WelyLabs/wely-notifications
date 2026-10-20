@@ -4,6 +4,7 @@ import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.models.NotificationType;
 import com.calendar.notifications.domain.services.NotificationService;
 import com.calendar.notifications.domain.services.PushService;
+import com.calendar.notifications.exception.TechnicalErrorCounter;
 import com.calendar.notifications.infrastructure.messaging.mappers.IncomingCallMapper;
 import com.calendar.notifications.infrastructure.messaging.models.CallEventBroadcastDTO;
 import com.calendar.notifications.infrastructure.messaging.notices.NotificationDrafts;
@@ -39,14 +40,17 @@ public class CallEventsConsumer {
     private final NotificationDrafts drafts;
     private final IncomingCallMapper callMapper;
     private final RecordReader reader;
+    private final TechnicalErrorCounter technicalErrors;
 
     public CallEventsConsumer(NotificationService notificationService, PushService pushService,
-                              NotificationDrafts drafts, IncomingCallMapper callMapper, RecordReader reader) {
+                              NotificationDrafts drafts, IncomingCallMapper callMapper, RecordReader reader,
+                              TechnicalErrorCounter technicalErrors) {
         this.notificationService = notificationService;
         this.pushService = pushService;
         this.drafts = drafts;
         this.callMapper = callMapper;
         this.reader = reader;
+        this.technicalErrors = technicalErrors;
     }
 
     @Bean
@@ -58,6 +62,7 @@ public class CallEventsConsumer {
         return reader.read(record, CallEventBroadcastDTO.class, TOPIC)
                 .flatMap(this::handle)
                 .onErrorResume(error -> {
+                    technicalErrors.count(error, TechnicalErrorCounter.SOURCE_KAFKA);
                     log.error("{} record dropped: {}", TOPIC, error.getMessage());
                     return Mono.empty();
                 });

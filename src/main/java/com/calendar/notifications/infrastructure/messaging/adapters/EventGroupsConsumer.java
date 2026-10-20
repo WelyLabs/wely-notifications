@@ -1,6 +1,7 @@
 package com.calendar.notifications.infrastructure.messaging.adapters;
 
 import com.calendar.notifications.domain.services.EventMembershipService;
+import com.calendar.notifications.exception.TechnicalErrorCounter;
 import com.calendar.notifications.infrastructure.messaging.mappers.EventMembershipMapper;
 import com.calendar.notifications.infrastructure.messaging.models.EventGroupChangedDTO;
 import org.slf4j.Logger;
@@ -35,12 +36,14 @@ public class EventGroupsConsumer {
     private final EventMembershipService membershipService;
     private final EventMembershipMapper mapper;
     private final RecordReader reader;
+    private final TechnicalErrorCounter technicalErrors;
 
     public EventGroupsConsumer(EventMembershipService membershipService, EventMembershipMapper mapper,
-                               RecordReader reader) {
+                               RecordReader reader, TechnicalErrorCounter technicalErrors) {
         this.membershipService = membershipService;
         this.mapper = mapper;
         this.reader = reader;
+        this.technicalErrors = technicalErrors;
     }
 
     @Bean
@@ -54,12 +57,14 @@ public class EventGroupsConsumer {
                 .flatMap(group -> Mono.defer(() -> membershipService.apply(mapper.toMembership(group)))
                         .retryWhen(Retry.backoff(MAX_RETRIES, FIRST_BACKOFF))
                         .onErrorResume(error -> {
+                            technicalErrors.count(error, TechnicalErrorCounter.SOURCE_KAFKA);
                             log.error("{} dropped after {} retries, eventId={} version={}: {}", TOPIC, MAX_RETRIES,
                                     group.eventId(), group.version(), error.getMessage());
                             return Mono.empty();
                         }))
                 .then()
                 .onErrorResume(error -> {
+                    technicalErrors.count(error, TechnicalErrorCounter.SOURCE_KAFKA);
                     log.error("{} record dropped: {}", TOPIC, error.getMessage());
                     return Mono.empty();
                 });

@@ -5,8 +5,14 @@ import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.models.NotificationType;
 import com.calendar.notifications.domain.services.EventMembershipService;
 import com.calendar.notifications.domain.services.NotificationService;
+import com.calendar.notifications.exception.GlobalErrorHandler;
+import com.calendar.notifications.exception.TechnicalErrorCode;
+import com.calendar.notifications.exception.TechnicalErrorCounter;
+import com.calendar.notifications.exception.TechnicalException;
 import com.calendar.notifications.infrastructure.messaging.notices.DateNoticeFormatter;
 import com.calendar.notifications.infrastructure.messaging.notices.NotificationDrafts;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -35,6 +41,9 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class EventDatesConsumerTest {
 
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    private final TechnicalErrorCounter technicalErrors = new TechnicalErrorCounter(registry);
+
     @Mock
     private NotificationService notificationService;
     @Mock
@@ -46,7 +55,7 @@ class EventDatesConsumerTest {
     void setUp() {
         consumer = new EventDatesConsumer(notificationService, membershipService,
                 new NotificationDrafts(new DateNoticeFormatter(ZoneId.of("Europe/Paris"))),
-                new RecordReader(JsonMapper.builder().build()));
+                new RecordReader(JsonMapper.builder().build(), technicalErrors), technicalErrors);
     }
 
     private static org.springframework.messaging.Message<byte[]> fixed(String eventId, String previousStart) {
@@ -101,7 +110,7 @@ class EventDatesConsumerTest {
         when(membershipService.find("e1"))
                 .thenReturn(Mono.just(new EventMembership("e1", "Bowling", List.of("bob", "carl"), 2)));
         when(notificationService.notify(argThat(n -> n != null && "bob".equals(n.recipientId()))))
-                .thenReturn(Mono.error(new IllegalStateException("store down")));
+                .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
         when(notificationService.notify(argThat(n -> n != null && "carl".equals(n.recipientId()))))
                 .thenAnswer(call -> Mono.just(call.getArgument(0)));
 
@@ -110,12 +119,15 @@ class EventDatesConsumerTest {
 
         verify(notificationService, timeout(2000))
                 .notify(argThat(n -> n != null && "carl".equals(n.recipientId())));
+
+        assertThat(technicalFailures(GlobalErrorHandler.UNEXPECTED_FAILURE_CODE)).isEqualTo(1.0);
+        assertThat(technicalFailures("NTF-TEC-001")).isGreaterThanOrEqualTo(1.0);
     }
 
     @Test
     @DisplayName("a projection failure drops the record without stopping the stream")
     void eventDates_shouldDropTheRecord_whenTheProjectionFails() {
-        when(membershipService.find("e1")).thenReturn(Mono.error(new IllegalStateException("store down")));
+        when(membershipService.find("e1")).thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
         when(membershipService.find("e2"))
                 .thenReturn(Mono.just(new EventMembership("e2", "Bowling", List.of("bob"), 1)));
         when(notificationService.notify(any())).thenAnswer(call -> Mono.just(call.getArgument(0)));
@@ -123,6 +135,9 @@ class EventDatesConsumerTest {
         StepVerifier.create(consumer.eventDates().apply(Flux.just(fixed("e1", "null"), fixed("e2", "null")))).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(notificationService, timeout(2000)).notify(argThat(n -> "bob".equals(n.recipientId())));
+
+        assertThat(technicalFailures(GlobalErrorHandler.UNEXPECTED_FAILURE_CODE)).isEqualTo(0.0);
+        assertThat(technicalFailures("NTF-TEC-001")).isEqualTo(1.0);
     }
 
     @Test
@@ -131,5 +146,13 @@ class EventDatesConsumerTest {
         consumer.eventDates().apply(Flux.just(fixed("e1", "null")));
 
         verifyNoInteractions(notificationService, membershipService);
+    }
+
+    private double technicalFailures(String code) {
+        Counter counter = registry.find(GlobalErrorHandler.TECHNICAL_ERRORS_METRIC)
+                .tag(GlobalErrorHandler.CODE_TAG, code)
+                .tag(GlobalErrorHandler.SOURCE_TAG, TechnicalErrorCounter.SOURCE_KAFKA)
+                .counter();
+        return counter == null ? 0 : counter.count();
     }
 }

@@ -2,12 +2,15 @@ package com.calendar.notifications.configuration;
 
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.method.HandlerTypePredicate;
-import org.springframework.web.reactive.config.EnableWebFlux;
 import org.springframework.web.reactive.config.PathMatchConfigurer;
 import org.springframework.web.reactive.config.WebFluxConfigurer;
 
+/**
+ * This service's additions to Boot's WebFlux setup. No {@code @EnableWebFlux}: it would switch off
+ * Boot's WebFlux auto-configuration, and with it every {@code spring.webflux.*} and
+ * {@code spring.http.codecs.*} property and Boot's JSON mapper in the codecs.
+ */
 @Configuration
-@EnableWebFlux
 public class WebConfig implements WebFluxConfigurer {
 
     @Override

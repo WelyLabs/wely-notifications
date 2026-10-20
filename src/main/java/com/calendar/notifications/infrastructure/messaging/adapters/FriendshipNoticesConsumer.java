@@ -1,6 +1,7 @@
 package com.calendar.notifications.infrastructure.messaging.adapters;
 
 import com.calendar.notifications.domain.services.NotificationService;
+import com.calendar.notifications.exception.TechnicalErrorCounter;
 import com.calendar.notifications.infrastructure.messaging.models.FriendshipNoticeDTO;
 import com.calendar.notifications.infrastructure.messaging.notices.NotificationDrafts;
 import org.slf4j.Logger;
@@ -28,12 +29,14 @@ public class FriendshipNoticesConsumer {
     private final NotificationService notificationService;
     private final NotificationDrafts drafts;
     private final RecordReader reader;
+    private final TechnicalErrorCounter technicalErrors;
 
     public FriendshipNoticesConsumer(NotificationService notificationService, NotificationDrafts drafts,
-                                     RecordReader reader) {
+                                     RecordReader reader, TechnicalErrorCounter technicalErrors) {
         this.notificationService = notificationService;
         this.drafts = drafts;
         this.reader = reader;
+        this.technicalErrors = technicalErrors;
     }
 
     @Bean
@@ -47,6 +50,7 @@ public class FriendshipNoticesConsumer {
                 .flatMap(notificationService::notify)
                 .then()
                 .onErrorResume(error -> {
+                    technicalErrors.count(error, TechnicalErrorCounter.SOURCE_KAFKA);
                     log.error("{} record dropped: {}", TOPIC, error.getMessage());
                     return Mono.empty();
                 });

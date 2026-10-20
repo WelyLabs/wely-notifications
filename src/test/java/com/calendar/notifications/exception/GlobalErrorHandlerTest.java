@@ -89,7 +89,7 @@ class GlobalErrorHandlerTest {
     void setUp() {
         registry = new SimpleMeterRegistry();
         client = WebTestClient.bindToController(new TestController())
-                .controllerAdvice(new GlobalErrorHandler(registry))
+                .controllerAdvice(new GlobalErrorHandler(new TechnicalErrorCounter(registry)))
                 .build();
     }
 
@@ -255,7 +255,7 @@ class GlobalErrorHandlerTest {
 
     private ResponseEntity<ProblemDetail> handled(Throwable failure) {
         MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/outside"));
-        return new GlobalErrorHandler(registry).handle(failure, exchange);
+        return new GlobalErrorHandler(new TechnicalErrorCounter(registry)).handle(failure, exchange);
     }
 
     private static void assertProblem(ResponseEntity<ProblemDetail> response, int status, String code) {
@@ -281,6 +281,9 @@ class GlobalErrorHandlerTest {
         assertProblem(handled(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)), 502, "NTF-TEC-001");
 
         assertThat(technicalFailures("NTF-TEC-001")).isEqualTo(1.0);
+        assertThat(registry.get(GlobalErrorHandler.TECHNICAL_ERRORS_METRIC)
+                .tag(GlobalErrorHandler.SOURCE_TAG, TechnicalErrorCounter.SOURCE_HTTP)
+                .counter().count()).isEqualTo(1.0);
     }
 
     @Test

@@ -7,6 +7,7 @@ import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.NotificationRepository;
 import com.calendar.notifications.domain.ports.PreferencesRepository;
 import com.calendar.notifications.exception.GlobalErrorHandler;
+import com.calendar.notifications.exception.RequestIds;
 import com.calendar.notifications.exception.TechnicalErrorCode;
 import com.calendar.notifications.exception.TechnicalException;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,6 +25,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 import java.time.Duration;
 import java.util.List;
@@ -440,5 +442,69 @@ class SecurityConfigTest {
                         .bodyValue("{\"environment\":\"PRODUCTION\"}")
                         .exchange(),
                 400, GlobalErrorHandler.VALIDATION_FAILED_CODE);
+    }
+
+    // --- The SSE route on Boot's WebFlux auto-configuration (no @EnableWebFlux) -----------------
+
+    @Test
+    @DisplayName("the stream opens as text/event-stream and sends the unread count first")
+    void stream_shouldOpenAnEventStream_withTheUnreadCountFirst() {
+        when(notificationRepository.countUnread("bob")).thenReturn(Mono.just(4L));
+
+        Flux<String> events = as("bob").get().uri("/notifications-service/notifications/stream")
+                .accept(MediaType.TEXT_EVENT_STREAM)
+                .exchange()
+                .expectStatus().isOk()
+                .expectHeader().contentTypeCompatibleWith(MediaType.TEXT_EVENT_STREAM)
+                .returnResult(String.class)
+                .getResponseBody();
+
+        StepVerifier.create(events)
+                .assertNext(first -> assertThat(first).contains("\"count\":4"))
+                .thenCancel()
+                .verify(Duration.ofSeconds(10));
+    }
+
+    // --- One request id from the gateway ---------------------------------------------------------
+
+    private static final String GATEWAY_ID = "abcd1234-5678-90ef-abcd-1234567890ef";
+
+    @Test
+    @DisplayName("the gateway's X-Request-Id is the problem's requestId, and is echoed on the response")
+    void requestIdWebFilter_shouldCarryTheGatewayId_intoTheProblem() {
+        as("bob").get().uri("/notifications-service/nowhere")
+                .header(RequestIds.REQUEST_ID_HEADER, GATEWAY_ID)
+                .exchange()
+                .expectStatus().isNotFound()
+                .expectHeader().valueEquals(RequestIds.REQUEST_ID_HEADER, GATEWAY_ID)
+                .expectBody()
+                .jsonPath("$." + GlobalErrorHandler.REQUEST_ID_PROPERTY).isEqualTo(GATEWAY_ID);
+    }
+
+    @Test
+    @DisplayName("the security chain's 401 carries the gateway's id too")
+    void requestIdWebFilter_shouldCarryTheGatewayId_intoTheSecurityProblem() {
+        client().get().uri("/notifications-service/notifications")
+                .header(RequestIds.REQUEST_ID_HEADER, GATEWAY_ID)
+                .exchange()
+                .expectStatus().isUnauthorized()
+                .expectHeader().valueEquals(RequestIds.REQUEST_ID_HEADER, GATEWAY_ID)
+                .expectBody()
+                .jsonPath("$." + GlobalErrorHandler.REQUEST_ID_PROPERTY).isEqualTo(GATEWAY_ID);
+    }
+
+    @Test
+    @DisplayName("a forged X-Request-Id is replaced by the local id, the same in the header and the problem")
+    void requestIdWebFilter_shouldReplaceAnInvalidId() {
+        var result = as("bob").get().uri("/notifications-service/nowhere")
+                .header(RequestIds.REQUEST_ID_HEADER, "forged id; level=ERROR")
+                .exchange()
+                .expectStatus().isNotFound()
+                .expectBody(String.class)
+                .returnResult();
+
+        String echoed = result.getResponseHeaders().getFirst(RequestIds.REQUEST_ID_HEADER);
+        assertThat(echoed).isNotBlank().doesNotContain("forged");
+        assertThat(result.getResponseBody()).contains("\"" + GlobalErrorHandler.REQUEST_ID_PROPERTY + "\":\"" + echoed + "\"");
     }
 }

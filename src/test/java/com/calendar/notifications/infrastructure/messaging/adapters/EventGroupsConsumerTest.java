@@ -2,7 +2,13 @@ package com.calendar.notifications.infrastructure.messaging.adapters;
 
 import com.calendar.notifications.domain.models.EventMembership;
 import com.calendar.notifications.domain.services.EventMembershipService;
+import com.calendar.notifications.exception.GlobalErrorHandler;
+import com.calendar.notifications.exception.TechnicalErrorCode;
+import com.calendar.notifications.exception.TechnicalErrorCounter;
+import com.calendar.notifications.exception.TechnicalException;
 import com.calendar.notifications.infrastructure.messaging.mappers.EventMembershipMapper;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -31,6 +37,9 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class EventGroupsConsumerTest {
 
+    private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    private final TechnicalErrorCounter technicalErrors = new TechnicalErrorCounter(registry);
+
     @Mock
     private EventMembershipService membershipService;
 
@@ -39,7 +48,7 @@ class EventGroupsConsumerTest {
     @BeforeEach
     void setUp() {
         consumer = new EventGroupsConsumer(membershipService, Mappers.getMapper(EventMembershipMapper.class),
-                new RecordReader(JsonMapper.builder().build()));
+                new RecordReader(JsonMapper.builder().build(), technicalErrors), technicalErrors);
     }
 
     private static org.springframework.messaging.Message<byte[]> group(String eventId, long version, boolean deleted) {
@@ -79,6 +88,9 @@ class EventGroupsConsumerTest {
 
         verify(membershipService, timeout(2000)).apply(argThat(membership -> "e2".equals(membership.eventId())));
         verify(membershipService, never()).apply(argThat(membership -> membership.eventId() == null));
+
+        assertThat(technicalFailures(GlobalErrorHandler.UNEXPECTED_FAILURE_CODE)).isEqualTo(1.0);
+        assertThat(technicalFailures("NTF-TEC-001")).isEqualTo(0.0);
     }
 
     @Test
@@ -88,7 +100,7 @@ class EventGroupsConsumerTest {
         when(membershipService.apply(argThat(membership -> membership != null && "e1".equals(membership.eventId()))))
                 .thenReturn(Mono.defer(() -> {
                     attempts.incrementAndGet();
-                    return Mono.error(new IllegalStateException("store down"));
+                    return Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE));
                 }));
         when(membershipService.apply(argThat(membership -> membership != null && "e2".equals(membership.eventId()))))
                 .thenReturn(Mono.just(true));
@@ -98,6 +110,9 @@ class EventGroupsConsumerTest {
         verify(membershipService, timeout(20_000)).apply(argThat(membership -> membership != null
                 && "e2".equals(membership.eventId())));
         assertThat(attempts.get()).isEqualTo(4);
+
+        assertThat(technicalFailures(GlobalErrorHandler.UNEXPECTED_FAILURE_CODE)).isEqualTo(0.0);
+        assertThat(technicalFailures("NTF-TEC-001")).isEqualTo(1.0);
     }
 
     @Test
@@ -106,5 +121,13 @@ class EventGroupsConsumerTest {
         consumer.eventGroups().apply(Flux.just(group("e1", 3, false)));
 
         verifyNoInteractions(membershipService);
+    }
+
+    private double technicalFailures(String code) {
+        Counter counter = registry.find(GlobalErrorHandler.TECHNICAL_ERRORS_METRIC)
+                .tag(GlobalErrorHandler.CODE_TAG, code)
+                .tag(GlobalErrorHandler.SOURCE_TAG, TechnicalErrorCounter.SOURCE_KAFKA)
+                .counter();
+        return counter == null ? 0 : counter.count();
     }
 }

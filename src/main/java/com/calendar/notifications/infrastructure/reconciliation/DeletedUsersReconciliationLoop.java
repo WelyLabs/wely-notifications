@@ -2,6 +2,7 @@ package com.calendar.notifications.infrastructure.reconciliation;
 
 import com.calendar.notifications.domain.services.AccountReconciliationService;
 import com.calendar.notifications.exception.BusinessException;
+import com.calendar.notifications.exception.TechnicalErrorCounter;
 import com.calendar.notifications.exception.TechnicalException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,6 +24,7 @@ public class DeletedUsersReconciliationLoop implements SmartLifecycle {
     private static final Logger log = LoggerFactory.getLogger(DeletedUsersReconciliationLoop.class);
 
     private final AccountReconciliationService reconciliation;
+    private final TechnicalErrorCounter technicalErrors;
     private final Duration initialDelay;
     private final Duration interval;
     private final Duration retryInterval;
@@ -31,10 +33,12 @@ public class DeletedUsersReconciliationLoop implements SmartLifecycle {
 
     public DeletedUsersReconciliationLoop(
             AccountReconciliationService reconciliation,
+            TechnicalErrorCounter technicalErrors,
             @Value("${app.account-erasure.reconciliation.initial-delay:1m}") Duration initialDelay,
             @Value("${app.account-erasure.reconciliation.interval:24h}") Duration interval,
             @Value("${app.account-erasure.reconciliation.retry-interval:1h}") Duration retryInterval) {
         this.reconciliation = reconciliation;
+        this.technicalErrors = technicalErrors;
         this.initialDelay = initialDelay;
         this.interval = interval;
         this.retryInterval = retryInterval;
@@ -82,6 +86,8 @@ public class DeletedUsersReconciliationLoop implements SmartLifecycle {
                 })
                 .switchIfEmpty(Mono.error(() -> new IllegalStateException("Reconciliation pass completed empty")))
                 .onErrorResume(error -> {
+                    // Counted here, not in the domain service: the domain does not know Micrometer.
+                    technicalErrors.count(error, TechnicalErrorCounter.SOURCE_RECONCILIATION);
                     String code = codeOf(error);
                     if (code != null) {
                         log.warn("Deleted-users reconciliation failed; next pass in {}: {} {}", retryInterval,

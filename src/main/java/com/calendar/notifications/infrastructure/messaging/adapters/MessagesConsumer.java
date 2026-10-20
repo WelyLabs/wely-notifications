@@ -1,6 +1,7 @@
 package com.calendar.notifications.infrastructure.messaging.adapters;
 
 import com.calendar.notifications.domain.services.NotificationService;
+import com.calendar.notifications.exception.TechnicalErrorCounter;
 import com.calendar.notifications.infrastructure.messaging.models.MessageBroadcastDTO;
 import com.calendar.notifications.infrastructure.messaging.notices.NotificationDrafts;
 import org.slf4j.Logger;
@@ -25,11 +26,14 @@ public class MessagesConsumer {
     private final NotificationService notificationService;
     private final NotificationDrafts drafts;
     private final RecordReader reader;
+    private final TechnicalErrorCounter technicalErrors;
 
-    public MessagesConsumer(NotificationService notificationService, NotificationDrafts drafts, RecordReader reader) {
+    public MessagesConsumer(NotificationService notificationService, NotificationDrafts drafts, RecordReader reader,
+                            TechnicalErrorCounter technicalErrors) {
         this.notificationService = notificationService;
         this.drafts = drafts;
         this.reader = reader;
+        this.technicalErrors = technicalErrors;
     }
 
     @Bean
@@ -43,6 +47,7 @@ public class MessagesConsumer {
                 .flatMap(notificationService::notify)
                 .then()
                 .onErrorResume(error -> {
+                    technicalErrors.count(error, TechnicalErrorCounter.SOURCE_KAFKA);
                     // The payload is not logged: it is someone's private message.
                     log.error("{} record dropped: {}", TOPIC, error.getMessage());
                     return Mono.empty();
