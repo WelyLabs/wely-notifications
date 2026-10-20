@@ -72,12 +72,14 @@ class PushServiceTest {
     @Mock
     private DeletedUserMarkers markers;
 
+    private final RecordingNotificationsActivity activity = new RecordingNotificationsActivity();
+
     private PushService service;
 
     @BeforeEach
     void setUp() {
         service = new PushService(subscriptions, preferences, sender, apnsDevices, nativeSender, markers,
-                Clock.fixed(NOW, ZoneOffset.UTC));
+                Clock.fixed(NOW, ZoneOffset.UTC), activity);
     }
 
     private static boolean accountDeleted(Throwable error) {
@@ -277,6 +279,8 @@ class PushServiceTest {
         verify(sender).send(eq(device("https://a/1")), eq(PushMessage.of(message())));
         verify(sender).send(eq(device("https://b/2")), any());
         verify(subscriptions, never()).delete(any());
+
+        assertThat(activity.events).containsExactly("sent:WEBPUSH", "sent:WEBPUSH");
     }
 
     @Test
@@ -291,6 +295,8 @@ class PushServiceTest {
         StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(subscriptions).delete("https://a/1");
+
+        assertThat(activity.events).containsExactly("expired:WEBPUSH");
     }
 
     @Test
@@ -304,6 +310,8 @@ class PushServiceTest {
 
         verifyNoInteractions(subscriptions);
         verify(sender, never()).send(any(), any());
+
+        assertThat(activity.events).isEmpty();
     }
 
     @Test
@@ -314,6 +322,8 @@ class PushServiceTest {
         StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(subscriptions, preferences, apnsDevices);
+
+        assertThat(activity.events).isEmpty();
     }
 
     @Test
@@ -328,6 +338,8 @@ class PushServiceTest {
         StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(sender).send(eq(device("https://b/2")), any());
+
+        assertThat(activity.events).containsExactlyInAnyOrder("failed:WEBPUSH", "sent:WEBPUSH");
     }
 
     @Test
@@ -338,6 +350,9 @@ class PushServiceTest {
                 .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
 
         StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
+
+        // No push service answered: nothing to tell.
+        assertThat(activity.events).isEmpty();
     }
 
     @Test
@@ -461,6 +476,8 @@ class PushServiceTest {
         StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(apnsDevices).delete(TOKEN);
+
+        assertThat(activity.events).containsExactly("expired:APNS");
     }
 
     @Test
@@ -581,6 +598,8 @@ class PushServiceTest {
         StepVerifier.create(service.deliverCall(ringing(), CALL)).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(apnsDevices).delete(VOIP_TOKEN);
+
+        assertThat(activity.events).containsExactly("expired:APNS");
     }
 
     @Test
@@ -592,6 +611,8 @@ class PushServiceTest {
         when(nativeSender.sendVoip(any(), any())).thenReturn(Mono.error(new IllegalStateException("boom")));
 
         StepVerifier.create(service.deliverCall(ringing(), CALL)).expectComplete().verify(Duration.ofSeconds(10));
+
+        assertThat(activity.events).containsExactly("failed:APNS");
     }
 
     @Test
@@ -674,5 +695,45 @@ class PushServiceTest {
         StepVerifier.create(service.endRinging("bob", "k1")).expectComplete().verify(Duration.ofSeconds(10));
 
         verify(apnsDevices).delete(VOIP_TOKEN);
+    }
+
+    @Test
+    @DisplayName("a push service refusing the push is told as a failed push")
+    void deliver_shouldTellAFailedPush_whenThePushServiceRefusesIt() {
+        when(sender.enabled()).thenReturn(true);
+        when(preferences.find("bob")).thenReturn(Mono.empty());
+        when(subscriptions.findByUser("bob")).thenReturn(Flux.just(device("https://a/1")));
+        when(sender.send(any(), any())).thenReturn(Mono.just(PushResult.FAILED));
+
+        StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
+
+        assertThat(activity.events).containsExactly("failed:WEBPUSH");
+    }
+
+    @Test
+    @DisplayName("an expired device whose removal then fails is told once, as expired")
+    void deliver_shouldTellTheExpiry_evenWhenForgettingTheDeviceFails() {
+        when(sender.enabled()).thenReturn(true);
+        when(preferences.find("bob")).thenReturn(Mono.empty());
+        when(subscriptions.findByUser("bob")).thenReturn(Flux.just(device("https://a/1")));
+        when(sender.send(any(), any())).thenReturn(Mono.just(PushResult.GONE));
+        when(subscriptions.delete("https://a/1"))
+                .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
+
+        StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
+
+        assertThat(activity.events).containsExactly("expired:WEBPUSH");
+    }
+
+    @Test
+    void deliver_shouldTellAnApnsPushSent() {
+        when(nativeSender.enabled()).thenReturn(true);
+        when(preferences.find("bob")).thenReturn(Mono.empty());
+        when(apnsDevices.findByUser("bob")).thenReturn(Flux.just(iphone(TOKEN)));
+        when(nativeSender.send(any(), any())).thenReturn(Mono.just(PushResult.DELIVERED));
+
+        StepVerifier.create(service.deliver(message())).expectComplete().verify(Duration.ofSeconds(10));
+
+        assertThat(activity.events).containsExactly("sent:APNS");
     }
 }

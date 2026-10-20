@@ -507,4 +507,21 @@ class SecurityConfigTest {
         assertThat(echoed).isNotBlank().doesNotContain("forged");
         assertThat(result.getResponseBody()).contains("\"" + GlobalErrorHandler.REQUEST_ID_PROPERTY + "\":\"" + echoed + "\"");
     }
+
+    // --- Metrics for Grafana -------------------------------------------------------------------
+
+    @Test
+    @DisplayName("after a request, /actuator/prometheus has the HTTP latency SLO buckets and the open-streams gauge")
+    void prometheus_shouldServeTheLatencyBuckets_andTheProductMetrics() {
+        when(preferencesRepository.find("bob")).thenReturn(Mono.empty());
+        as("bob").get().uri("/notifications-service/preferences").exchange().expectStatus().isOk();
+
+        client().get().uri("/actuator/prometheus")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(String.class)
+                .value(metrics -> assertThat(metrics)
+                        .containsPattern("http_server_requests_seconds_bucket\\{[^}]*le=\"0\\.25\"")
+                        .contains("wely_notifications_streams_active"));
+    }
 }

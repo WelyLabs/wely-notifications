@@ -59,13 +59,15 @@ class NotificationServiceTest {
     @Mock
     private DeletedUserMarkers markers;
 
+    private final RecordingNotificationsActivity activity = new RecordingNotificationsActivity();
+
     private NotificationService service;
 
     @BeforeEach
     void setUp() {
         NotificationWording wording = notification -> notification.title() + "#" + notification.count();
         service = new NotificationService(repository, live, pushService, wording, markers,
-                Clock.fixed(NOW, ZoneOffset.UTC));
+                Clock.fixed(NOW, ZoneOffset.UTC), activity);
     }
 
     /** The marker store as the service sees it: true when any id asked about is one of these. */
@@ -280,6 +282,7 @@ class NotificationServiceTest {
                 .expectComplete().verify(Duration.ofSeconds(10));
 
         verify(live, never()).close(any());
+        assertThat(activity.events).containsExactly("streamOpened", "streamClosed");
     }
 
     @Test
@@ -299,6 +302,7 @@ class NotificationServiceTest {
                 .verify(Duration.ofSeconds(5));
 
         verify(live).close("bob");
+        assertThat(activity.events).containsExactly("streamOpened", "streamClosed");
     }
 
     @Test
@@ -312,6 +316,8 @@ class NotificationServiceTest {
                 .verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(live, repository);
+        // Refused before any stream opened: nothing to count.
+        assertThat(activity.events).isEmpty();
     }
 
     @Test
@@ -356,5 +362,36 @@ class NotificationServiceTest {
                 .expectComplete().verify(Duration.ofSeconds(10));
 
         verifyNoInteractions(repository, live, pushService);
+    }
+
+    @Test
+    @DisplayName("a live stream counts as open while subscribed, and closes when the client leaves")
+    void openStream_shouldTellOpenThenClosed_whenTheClientCancels() {
+        deleted();
+        when(repository.countUnread("bob")).thenReturn(Mono.just(0L));
+        when(live.stream("bob")).thenReturn(Flux.never());
+
+        StepVerifier.create(service.openStream("bob").flatMapMany(updates -> updates))
+                .expectNext(new LiveUpdate.UnreadChanged(0))
+                .then(() -> assertThat(activity.events).containsExactly("streamOpened"))
+                .thenCancel()
+                .verify(Duration.ofSeconds(10));
+
+        assertThat(activity.events).containsExactly("streamOpened", "streamClosed");
+    }
+
+    @Test
+    @DisplayName("a stream that fails is closed too, so the gauge does not drift")
+    void openStream_shouldTellClosed_whenTheStreamFails() {
+        deleted();
+        when(repository.countUnread("bob"))
+                .thenReturn(Mono.error(new TechnicalException(TechnicalErrorCode.STORE_UNAVAILABLE)));
+        when(live.stream("bob")).thenReturn(Flux.never());
+
+        StepVerifier.create(service.openStream("bob").flatMapMany(updates -> updates))
+                .expectError(TechnicalException.class)
+                .verify(Duration.ofSeconds(10));
+
+        assertThat(activity.events).containsExactly("streamOpened", "streamClosed");
     }
 }

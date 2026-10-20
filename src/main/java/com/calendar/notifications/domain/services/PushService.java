@@ -6,6 +6,7 @@ import com.calendar.notifications.domain.models.Notification;
 import com.calendar.notifications.domain.models.NotificationCategory;
 import com.calendar.notifications.domain.models.NotificationType;
 import com.calendar.notifications.domain.models.NotificationPreferences;
+import com.calendar.notifications.domain.models.PushChannel;
 import com.calendar.notifications.domain.models.PushMessage;
 import com.calendar.notifications.domain.models.PushResult;
 import com.calendar.notifications.domain.models.PushSubscription;
@@ -13,6 +14,7 @@ import com.calendar.notifications.domain.models.VoipPush;
 import com.calendar.notifications.domain.ports.ApnsDeviceRepository;
 import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.NativePushSender;
+import com.calendar.notifications.domain.ports.NotificationsActivity;
 import com.calendar.notifications.domain.ports.PreferencesRepository;
 import com.calendar.notifications.domain.ports.PushSender;
 import com.calendar.notifications.domain.ports.SubscriptionRepository;
@@ -38,10 +40,11 @@ public class PushService {
     private final NativePushSender nativeSender;
     private final DeletedUserMarkers markers;
     private final Clock clock;
+    private final NotificationsActivity activity;
 
     public PushService(SubscriptionRepository subscriptions, PreferencesRepository preferences, PushSender sender,
                        ApnsDeviceRepository apnsDevices, NativePushSender nativeSender, DeletedUserMarkers markers,
-                       Clock clock) {
+                       Clock clock, NotificationsActivity activity) {
         this.subscriptions = subscriptions;
         this.preferences = preferences;
         this.sender = sender;
@@ -49,6 +52,7 @@ public class PushService {
         this.nativeSender = nativeSender;
         this.markers = markers;
         this.clock = clock;
+        this.activity = activity;
     }
 
     public String publicKey() {
@@ -200,7 +204,7 @@ public class PushService {
     }
 
     private Flux<Void> send(PushSubscription device, PushMessage message) {
-        return sender.send(device, message)
+        return answered(PushChannel.WEBPUSH, sender.send(device, message))
                 .filter(PushResult.GONE::equals)
                 .flatMap(gone -> subscriptions.delete(device.endpoint()))
                 .onErrorResume(PushService::deviceFailed)
@@ -208,7 +212,7 @@ public class PushService {
     }
 
     private Flux<Void> send(ApnsDevice device, PushMessage message) {
-        return nativeSender.send(device, message)
+        return answered(PushChannel.APNS, nativeSender.send(device, message))
                 .filter(PushResult.GONE::equals)
                 .flatMap(gone -> apnsDevices.delete(device.token()))
                 .onErrorResume(PushService::deviceFailed)
@@ -216,11 +220,25 @@ public class PushService {
     }
 
     private Flux<Void> sendVoip(ApnsDevice device, VoipPush push) {
-        return nativeSender.sendVoip(device, push)
+        return answered(PushChannel.APNS, nativeSender.sendVoip(device, push))
                 .filter(PushResult.GONE::equals)
                 .flatMap(gone -> apnsDevices.delete(device.token()))
                 .onErrorResume(PushService::deviceFailed)
                 .flux();
+    }
+
+    // Told the moment the push service answers, before an expired device is forgotten: a failed
+    // delete afterwards does not change what the push service said.
+    private Mono<PushResult> answered(PushChannel channel, Mono<PushResult> sent) {
+        return sent
+                .doOnNext(result -> {
+                    switch (result) {
+                        case DELIVERED -> activity.pushSent(channel);
+                        case GONE -> activity.pushExpired(channel);
+                        case FAILED -> activity.pushFailed(channel);
+                    }
+                })
+                .doOnError(error -> activity.pushFailed(channel));
     }
 
     private static Mono<Void> deviceFailed(Throwable error) {

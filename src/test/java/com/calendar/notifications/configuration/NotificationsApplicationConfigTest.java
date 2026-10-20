@@ -8,6 +8,7 @@ import com.calendar.notifications.domain.ports.LiveNotifications;
 import com.calendar.notifications.domain.ports.NativePushSender;
 import com.calendar.notifications.domain.ports.NotificationRepository;
 import com.calendar.notifications.domain.ports.NotificationWording;
+import com.calendar.notifications.domain.ports.NotificationsActivity;
 import com.calendar.notifications.domain.ports.PreferencesRepository;
 import com.calendar.notifications.domain.ports.PushSender;
 import com.calendar.notifications.domain.ports.SubscriptionRepository;
@@ -48,11 +49,12 @@ class NotificationsApplicationConfigTest {
         EventMembers eventMembers = mock(EventMembers.class);
         DeletedUserMarkers markers = mock(DeletedUserMarkers.class);
         Clock clock = Clock.systemUTC();
+        NotificationsActivity activity = mock(NotificationsActivity.class);
 
         PushService pushService = config.pushService(subscriptions, preferences, sender, apnsDevices, nativeSender,
-                markers, clock);
+                markers, clock, activity);
         NotificationService notificationService = config.notificationService(repository, live, pushService,
-                mock(NotificationWording.class), markers, clock);
+                mock(NotificationWording.class), markers, clock, activity);
 
         assertThat(pushService).isNotNull();
         assertThat(notificationService).isNotNull();

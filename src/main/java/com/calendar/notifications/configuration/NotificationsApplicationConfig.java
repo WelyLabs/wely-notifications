@@ -8,6 +8,7 @@ import com.calendar.notifications.domain.ports.LiveNotifications;
 import com.calendar.notifications.domain.ports.NativePushSender;
 import com.calendar.notifications.domain.ports.NotificationRepository;
 import com.calendar.notifications.domain.ports.NotificationWording;
+import com.calendar.notifications.domain.ports.NotificationsActivity;
 import com.calendar.notifications.domain.ports.PreferencesRepository;
 import com.calendar.notifications.domain.ports.PushSender;
 import com.calendar.notifications.domain.ports.SubscriptionRepository;
@@ -37,15 +38,18 @@ public class NotificationsApplicationConfig {
     @Bean
     public PushService pushService(SubscriptionRepository subscriptions, PreferencesRepository preferences,
                                    PushSender sender, ApnsDeviceRepository apnsDevices,
-                                   NativePushSender nativeSender, DeletedUserMarkers markers, Clock clock) {
-        return new PushService(subscriptions, preferences, sender, apnsDevices, nativeSender, markers, clock);
+                                   NativePushSender nativeSender, DeletedUserMarkers markers, Clock clock,
+                                   NotificationsActivity activity) {
+        return new PushService(subscriptions, preferences, sender, apnsDevices, nativeSender, markers, clock,
+                activity);
     }
 
     @Bean
     public NotificationService notificationService(NotificationRepository repository, LiveNotifications live,
                                                    PushService pushService, NotificationWording wording,
-                                                   DeletedUserMarkers markers, Clock clock) {
-        return new NotificationService(repository, live, pushService, wording, markers, clock);
+                                                   DeletedUserMarkers markers, Clock clock,
+                                                   NotificationsActivity activity) {
+        return new NotificationService(repository, live, pushService, wording, markers, clock, activity);
     }
 
     @Bean

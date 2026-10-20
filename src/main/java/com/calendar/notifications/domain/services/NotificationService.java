@@ -7,6 +7,7 @@ import com.calendar.notifications.domain.ports.DeletedUserMarkers;
 import com.calendar.notifications.domain.ports.LiveNotifications;
 import com.calendar.notifications.domain.ports.NotificationRepository;
 import com.calendar.notifications.domain.ports.NotificationWording;
+import com.calendar.notifications.domain.ports.NotificationsActivity;
 import com.calendar.notifications.exception.BusinessErrorCode;
 import com.calendar.notifications.exception.BusinessException;
 import reactor.core.publisher.Flux;
@@ -33,15 +34,18 @@ public class NotificationService {
     private final NotificationWording wording;
     private final DeletedUserMarkers markers;
     private final Clock clock;
+    private final NotificationsActivity activity;
 
     public NotificationService(NotificationRepository repository, LiveNotifications live, PushService pushService,
-                               NotificationWording wording, DeletedUserMarkers markers, Clock clock) {
+                               NotificationWording wording, DeletedUserMarkers markers, Clock clock,
+                               NotificationsActivity activity) {
         this.repository = repository;
         this.live = live;
         this.pushService = pushService;
         this.wording = wording;
         this.markers = markers;
         this.clock = clock;
+        this.activity = activity;
     }
 
     /** Records, streams and pushes the notification; empty when the recipient or the actor is deleted. */
@@ -127,7 +131,10 @@ public class NotificationService {
                 .filter(Boolean::booleanValue)
                 .doOnNext(deleted -> live.close(recipientId))
                 .then(Mono.empty());
-        return Flux.merge(initial, live.stream(recipientId), closeIfDeleted);
+        // Open from subscription to the end, however it ends: the client leaving cancels it.
+        return Flux.merge(initial, live.stream(recipientId), closeIfDeleted)
+                .doOnSubscribe(subscription -> activity.streamOpened())
+                .doFinally(signal -> activity.streamClosed());
     }
 
     private Mono<Boolean> isDeleted(String userId) {
