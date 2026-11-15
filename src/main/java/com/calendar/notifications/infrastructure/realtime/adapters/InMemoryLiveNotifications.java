@@ -2,6 +2,7 @@ package com.calendar.notifications.infrastructure.realtime.adapters;
 
 import com.calendar.notifications.domain.models.LiveUpdate;
 import com.calendar.notifications.domain.ports.LiveNotifications;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Sinks;
@@ -12,6 +13,7 @@ import java.util.concurrent.ConcurrentMap;
 
 /** Live updates in memory, one sink per connected user: they only reach this pod's clients. */
 @Component
+@ConditionalOnProperty(name = "app.live.mode", havingValue = "local")
 public class InMemoryLiveNotifications implements LiveNotifications {
 
     private final ConcurrentMap<String, Channel> channels = new ConcurrentHashMap<>();

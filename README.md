@@ -297,6 +297,12 @@ Only `USER_DELETED` starts from the **earliest** offset: a deletion published be
 | `BIRTHDAY_NOTICES_TOPIC` | `{type, recipientId, honoreeId, honoreeName, date, daysUntil, closeness, surpriseEventId, organizerId, organizerName}` | one birthday notification to `recipientId`, see the types above; unknown type or missing name, date or ids → ignored |
 | `USER_DELETED_TOPIC` | `{userId, deletedAt}` (`deletedAt` missing from older records) | erases the account, see [Account deletion](#account-deletion) |
 
+### Live updates between pods
+
+Every pod can run in parallel. A live update (`notification`, `unread`) and the closing of a deleted account's streams are published to `${TOPIC_PREFIX}live-notifications`, which **each pod reads in a consumer group of its own** (`notifications-live-<pod>`): every pod receives every record and delivers those whose recipient has a stream open on it. A pod never delivers its own updates before they come back from the broker, or they would show twice. Same pattern as `wely-chat`'s message broadcast.
+
+It stays best effort: the notification is stored before it is pushed, so a lost record costs a refresh. The topic uses the short `live` retention. `NOTIFICATIONS_LIVE_MODE=local` keeps updates in the pod, for one replica without a broker.
+
 La projection `event_members` existe parce que `EVENT_DATE_FIXED` ne porte pas la liste des membres.
 A deleted event keeps its version there, with no member **and no title**.
 
@@ -441,8 +447,6 @@ They also cover the deleted-account markers, deletions by actor, a late friend r
 
 ## Limites connues
 
-- **Une seule réplique.** Les consommateurs Kafka partagent un groupe, ils passeraient à l'échelle ; mais le flux SSE est un `Sink` **en mémoire** par utilisateur : une notification enregistrée par un pod n'atteint pas les onglets connectés à un autre. Plusieurs répliques demanderaient une diffusion entre pods (un topic à un groupe par pod, comme `wely-chat` pour ses messages).
-- **Closing a deleted account's streams is per pod.** Only the streams open on the pod that reads `USER_DELETED` are closed; with several replicas, a stream open on another pod would stay open.
 - **The caller's name is the one at call start.** It is the `preferred_username` wely-chat read from the caller's token; this service keeps no user directory, so a rename during a call is not reflected, and a call event without a name falls back to « Appel vidéo — On t'appelle sur Wely ».
 - **Au plus une fois, sans outbox côté producteurs.** Un enregistrement en échec est abandonné après journalisation (avec trois nouvelles tentatives pour la projection des membres). Une notification manquée n'est pas rejouée.
 - **Erasure catch-up is daily.** A `USER_DELETED` still failing after five attempts, or lost to a pod stopping mid-way, leaves a marker without `erasedAt` (or no marker at all) until the next reconciliation pass: at most 24 h, plus 1 h per failed pass.
