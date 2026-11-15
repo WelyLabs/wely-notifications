@@ -372,6 +372,8 @@ Toutes les réponses d'erreur sont des `ProblemDetail` (RFC 7807), avec `code` e
 |---|---|---|
 | `MONGODB_URI` | — (requis) | URI MongoDB (`spring.mongodb.uri`, la clé Boot 4) |
 | `KAFKA_BOOTSTRAP_SERVER` | — (requis) | Brokers Kafka |
+| `KAFKA_SECURITY_PROTOCOL` | `PLAINTEXT` | `SASL_SSL` for Confluent Cloud (dev, prod) |
+| `KAFKA_API_KEY` / `KAFKA_API_SECRET` | — | The Kafka cluster's API key, for `SASL_SSL` (sealed in `dev-wely-cloud`) |
 | `KEYCLOAK_ISSUER_URI` | — (requis) | Émetteur public des jetons |
 | `KEYCLOAK_INTERNAL_JWK_SET_URI` | — (requis) | Clés de signature, par le Service Keycloak interne |
 | `VAPID_PUBLIC_KEY` | vide | Point P-256 non compressé (65 octets), base64url |
