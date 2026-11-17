@@ -20,7 +20,7 @@ Il écoute ce qui se passe ailleurs — un appel qui sonne, un message, la date 
 
 ## Stack
 
-Java 25 · Spring Boot 4 · WebFlux · Spring Cloud Stream (Kafka) · MongoDB réactif · Spring Security (JWT Keycloak) · MapStruct · springdoc · JDK seule pour la cryptographie Web Push et APNs · Reactor Netty HTTP/2 pour APNs
+Java 25 · Spring Boot 4 · WebFlux · Spring Cloud Stream (Kafka) · MongoDB réactif · Spring Security (JWT Auth0) · MapStruct · springdoc · JDK seule pour la cryptographie Web Push et APNs · Reactor Netty HTTP/2 pour APNs
 
 ---
 
@@ -368,7 +368,7 @@ Toutes les réponses d'erreur sont des `ProblemDetail` (RFC 7807), avec `code` e
 | Profil | Usage |
 |---|---|
 | *(aucun)* / `prod` | `application.properties` — tout vient de l'environnement |
-| `dev` | MongoDB, Kafka et Keycloak sur `localhost` |
+| `dev` | MongoDB et Kafka sur `localhost`, jetons du tenant Auth0 |
 
 ---
 
@@ -380,8 +380,8 @@ Toutes les réponses d'erreur sont des `ProblemDetail` (RFC 7807), avec `code` e
 | `KAFKA_BOOTSTRAP_SERVER` | — (requis) | Brokers Kafka |
 | `KAFKA_SECURITY_PROTOCOL` | `PLAINTEXT` | `SASL_SSL` for Confluent Cloud (dev, prod) |
 | `KAFKA_API_KEY` / `KAFKA_API_SECRET` | — | The Kafka cluster's API key, for `SASL_SSL` (sealed in `dev-wely-cloud`) |
-| `KEYCLOAK_ISSUER_URI` | — (requis) | Émetteur public des jetons |
-| `KEYCLOAK_INTERNAL_JWK_SET_URI` | — (requis) | Clés de signature, par le Service Keycloak interne |
+| `OIDC_ISSUER_URI` | — (requis) | Émetteur Auth0, `https://auth.welylabs.app/` |
+| `OIDC_JWK_SET_URI` | — (requis) | Clés de signature, `https://auth.welylabs.app/.well-known/jwks.json` |
 | `VAPID_PUBLIC_KEY` | vide | Point P-256 non compressé (65 octets), base64url |
 | `VAPID_PRIVATE_KEY` | vide | Scalaire P-256 (32 octets), base64url |
 | `VAPID_SUBJECT` | vide | Contact pour les services push, `mailto:…` |
@@ -425,8 +425,8 @@ openssl ec -in vapid.pem -pubout -outform DER | tail -c 65 | base64 | tr '/+' '_
 > `wely-gitops-infra` a été supprimé en novembre 2026 avec les bases qu'il déployait : depuis que
 > PostgreSQL, Neo4j, MongoDB, Kafka et le stockage des photos sont des services managés (Neon,
 > Aura, Atlas, Confluent Cloud, Cloudflare R2), un cluster local n'amorcerait qu'une coquille sans
-> rien à interroger. Pour travailler sur ce service, lance Keycloak par le `docker compose` du
-> dépôt de plateforme et donne-lui, par variables d'environnement, les URI de tes propres
+> rien à interroger. Pour travailler sur ce service, lance-le en profil `dev`, qui valide les
+> jetons du tenant Auth0 (`auth.welylabs.app`), et donne-lui, par variables d'environnement, les URI de tes propres
 > instances — les paliers gratuits de ces cinq services suffisent.
 
 ---
